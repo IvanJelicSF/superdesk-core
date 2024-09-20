@@ -62,10 +62,10 @@ class RitzauFeedParser(XMLFeedParser):
                 ("keywords", {"xpath": "strapline/text()", "filter": lambda v: list(filter(None, v.split("/")))}),
                 ("abstract", "subtitle"),
                 ("byline", "origin"),
+                ("ritzau_section", "section"),
                 ("version", {"xpath": "version/text()", "filter": int}),
                 ("ednote", {"xpath": "TilRedaktionen/text()", "filter": self._ednote_filter}),
                 ("subject", {"xpath": "IPTCList/a:int/text()", "list": True, "filter": self._subject_filter}),
-                ("ritzau_section", {"xpath": "section/text()"}),
             ]
         )
 
