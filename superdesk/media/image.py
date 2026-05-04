@@ -64,7 +64,7 @@ def fix_orientation(file_stream):
         if fmt.upper() == "JPEG" and transposed.mode != "RGB":
             transposed = transposed.convert("RGB")
         transposed.save(output, fmt, quality=95)
-    except (IOError, OSError):
+    except OSError:
         output = io.BytesIO()
         transposed.convert("RGB").save(output, fmt, quality=95)
     output.seek(0)

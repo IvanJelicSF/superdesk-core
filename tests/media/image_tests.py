@@ -94,7 +94,8 @@ class MediaOperationsTestCase(TestCase):
 
 def _make_image_with_orientation(orientation_tag, fmt="JPEG"):
     """Build a 200x100 image with a red mark at the top-left of the stored
-    pixels and the given EXIF Orientation tag."""
+    pixels and the given EXIF Orientation tag.
+    """
     img = Image.new("RGB", (200, 100), "white")
     for x in range(0, 50):
         for y in range(0, 25):
