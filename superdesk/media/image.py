@@ -16,7 +16,7 @@ import logging
 from typing import BinaryIO, Dict, List, Union
 
 from superdesk.text_utils import decode
-from PIL import Image, ExifTags
+from PIL import Image, ExifTags, ImageOps
 from PIL import IptcImagePlugin
 from PIL.TiffImagePlugin import IFDRational
 from flask import json
@@ -33,45 +33,42 @@ except ImportError:
     pass
 
 
-ORIENTATIONS = {
-    1: ("Normal", 0),
-    2: ("Mirrored left-to-right", 0),
-    3: ("Rotated 180 degrees", 180),
-    4: ("Mirrored top-to-bottom", 0),
-    5: ("Mirrored along top-left diagonal", 0),
-    6: ("Rotated 90 degrees", -90),
-    7: ("Mirrored along top-right diagonal", 0),
-    8: ("Rotated 270 degrees", -270),
-}
 EXIF_ORIENTATION_TAG = 274
 
 
 def fix_orientation(file_stream):
-    """Returns the image fixed accordingly to the orientation.
+    """Return the image with EXIF Orientation baked into the pixels.
+
+    Applies the EXIF Orientation transform (rotate/flip) to the pixel
+    data and strips the tag, so downstream cropping/resizing works on
+    upright pixels. Returns the original stream unchanged if no
+    correction is needed.
 
     @param file_stream: stream
     """
     file_stream.seek(0)
+    img = Image.open(file_stream)
+    try:
+        exif = img.getexif()
+    except AttributeError:
+        exif = None
+    orientation = exif.get(EXIF_ORIENTATION_TAG) if exif else None
+    if not orientation or orientation == 1:
+        file_stream.seek(0)
+        return file_stream
 
-    # For PNG image we are getting mode RGBA so fix it while croping png image
-    img = Image.open(file_stream).convert("RGB")
-    file_stream.seek(0)
-    if not hasattr(img, "_getexif"):
-        return file_stream
-    rv = img._getexif()
-    if not rv:
-        return file_stream
-    exif = dict(rv)
-    if exif.get(EXIF_ORIENTATION_TAG, None):
-        orientation = exif.get(EXIF_ORIENTATION_TAG)
-        if orientation in [3, 6, 8]:
-            degrees = ORIENTATIONS[orientation][1]
-            img2 = img.rotate(degrees)
-            output = io.BytesIO()
-            img2.save(output, "jpeg")
-            output.seek(0)
-            return output
-    return file_stream
+    transposed = ImageOps.exif_transpose(img)
+    fmt = img.format or "JPEG"
+    output = io.BytesIO()
+    try:
+        if fmt.upper() == "JPEG" and transposed.mode != "RGB":
+            transposed = transposed.convert("RGB")
+        transposed.save(output, fmt, quality=95)
+    except (IOError, OSError):
+        output = io.BytesIO()
+        transposed.convert("RGB").save(output, fmt, quality=95)
+    output.seek(0)
+    return output
 
 
 def get_meta(file_stream):
