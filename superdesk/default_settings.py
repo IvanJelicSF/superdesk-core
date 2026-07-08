@@ -238,6 +238,10 @@ TENANT_EXEMPT_PATHS: list = []
 #: dual-written to the account; user profiles/preferences stay per tenant
 SHARED_ACCOUNTS_ENABLED = strtobool(env("SHARED_ACCOUNTS_ENABLED", "false"))
 
+#: phase 2 of shared accounts: passwords live only on the control-plane account,
+#: tenant user docs no longer store hashes and there is no tenant-local login fallback
+SHARED_ACCOUNTS_AUTHORITATIVE = strtobool(env("SHARED_ACCOUNTS_AUTHORITATIVE", "false"))
+
 #: elastic url
 ELASTICSEARCH_URL = env("ELASTICSEARCH_URL", "http://localhost:9200")
 CONTENTAPI_ELASTICSEARCH_URL = env("CONTENTAPI_ELASTICSEARCH_URL", ELASTICSEARCH_URL)

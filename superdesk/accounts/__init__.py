@@ -23,6 +23,7 @@ and password writes are dual-written to the account.
 
 from .service import (  # noqa: F401
     is_shared_accounts_enabled,
+    is_accounts_authoritative,
     ensure_account_indexes,
     find_account,
     find_account_sync,
@@ -30,4 +31,6 @@ from .service import (  # noqa: F401
     account_password_expired,
     upsert_account_credentials,
     link_user_credentials,
+    record_account_tenant,
+    list_account_tenants,
 )

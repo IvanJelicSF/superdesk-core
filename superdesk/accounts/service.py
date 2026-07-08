@@ -22,10 +22,16 @@ from superdesk.core import get_app_config, get_current_async_app
 logger = logging.getLogger(__name__)
 
 ACCOUNTS_COLLECTION = "accounts"
+ACCOUNT_TENANTS_COLLECTION = "account_tenants"
 
 
 def is_shared_accounts_enabled() -> bool:
     return bool(get_app_config("SHARED_ACCOUNTS_ENABLED", False))
+
+
+def is_accounts_authoritative() -> bool:
+    """Phase 2: passwords live only on the account; no tenant-local fallback."""
+    return is_shared_accounts_enabled() and bool(get_app_config("SHARED_ACCOUNTS_AUTHORITATIVE", False))
 
 
 def _collection():
@@ -36,9 +42,27 @@ def _collection_async():
     return get_current_async_app().tenants.get_control_plane_collection_async(ACCOUNTS_COLLECTION)
 
 
+def _mapping_collection():
+    return get_current_async_app().tenants.get_control_plane_collection(ACCOUNT_TENANTS_COLLECTION)
+
+
 def ensure_account_indexes() -> None:
     _collection().create_index("email", unique=True)
     _collection().create_index("username", unique=True, sparse=True)
+    _mapping_collection().create_index([("account_id", 1), ("tenant", 1)], unique=True)
+
+
+def record_account_tenant(account_id: ObjectId, tenant_id: str) -> None:
+    """Maintain the account -> tenants mapping (used by the tenant switcher)."""
+    _mapping_collection().update_one(
+        {"account_id": account_id, "tenant": tenant_id},
+        {"$set": {"_updated": utcnow()}, "$setOnInsert": {"_created": utcnow()}},
+        upsert=True,
+    )
+
+
+def list_account_tenants(account_id: ObjectId) -> list[str]:
+    return sorted(doc["tenant"] for doc in _mapping_collection().find({"account_id": account_id}))
 
 
 def _credentials_query(username_or_email: str) -> dict:
@@ -136,4 +160,15 @@ async def link_user_credentials(user_doc: dict) -> Optional[ObjectId]:
         user_doc.get("password_changed_on"),
     )
     user_doc["account_id"] = account_id
+
+    from superdesk.core.tenants import try_get_current_tenant
+
+    tenant = try_get_current_tenant()
+    if tenant is not None and not tenant.is_default:
+        record_account_tenant(account_id, tenant.id)
+
+    if is_accounts_authoritative():
+        # phase 2: the account is the only credential store
+        user_doc.pop("password", None)
+
     return account_id

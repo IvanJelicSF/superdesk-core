@@ -102,3 +102,15 @@ async def accounts_migrate():
             linked += 1
 
     echo(f"accounts migrated={migrated} linked={linked} conflicts={conflicts} skipped={skipped}")
+
+
+@cli.command("accounts:tenants", tenant_command=False)
+@click.option("--email", "-e", required=True, help="Email of the account.")
+async def accounts_tenants(email):
+    """List the tenants where the account has a linked user."""
+
+    account = service.find_account_sync(email)
+    if account is None:
+        raise click.UsageError(f"No account for '{email}'")
+    for tenant_id in service.list_account_tenants(account["_id"]):
+        echo(tenant_id)

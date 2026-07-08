@@ -147,3 +147,25 @@ class AuthenticateAccountTestCase(IsolatedAsyncioTestCase):
         self.users_service.find_one_async.return_value = self.local_user
         with self.assertRaises(PasswordExpiredError):
             await self.auth_service.authenticate_account(self.account, {"username": "john", "password": "secret"})
+
+
+class AccountTenantsMappingTestCase(AccountsServiceTestCase):
+    async def test_link_records_tenant_mapping(self):
+        from superdesk.core.tenants import Tenant, tenant_context
+
+        doc = {"email": "john@example.com", "username": "john", "password": hash_password("secret")}
+        with tenant_context(Tenant(id="tenant-a", hosts=("a.example.com",))):
+            account_id = await accounts_service.link_user_credentials(dict(doc))
+        with tenant_context(Tenant(id="tenant-b", hosts=("b.example.com",))):
+            await accounts_service.link_user_credentials(dict(doc))
+
+        self.assertEqual(accounts_service.list_account_tenants(account_id), ["tenant-a", "tenant-b"])
+
+    async def test_authoritative_mode_strips_tenant_password(self):
+        self.app.wsgi.config["SHARED_ACCOUNTS_AUTHORITATIVE"] = True
+        doc = {"email": "john@example.com", "password": hash_password("secret")}
+        account_id = await accounts_service.link_user_credentials(doc)
+        self.assertIsNotNone(account_id)
+        self.assertNotIn("password", doc)
+        account = await accounts_service.find_account("john@example.com")
+        self.assertTrue(accounts_service.verify_account_password(account, "secret"))

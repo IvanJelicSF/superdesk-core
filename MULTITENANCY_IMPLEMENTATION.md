@@ -21,7 +21,7 @@ every code path, so single-tenant deployments behave exactly as before with zero
 | 8 | Hardening (cache keys, locks, S3 subfolder, audit) | ✅ done |
 | 9 | Accounts phase 1 (shared credentials, additive) | ✅ done |
 | 10 | Cross-tenant content exchange | ✅ done |
-| 11 | Accounts phase 2 + tenant admin API | ⬜ pending |
+| 11 | Accounts phase 2 + tenant admin API | ⏳ partial (see M11) |
 
 ## New settings
 
@@ -251,6 +251,27 @@ same subscriber just switches to the `http_push` transmitter.
   and the enqueue contract (tenant header, provenance fields).
 - Follow-up (moved to M11 scope): manual "send to tenant" endpoint + `send_to_tenant` privilege
   for unpublished content; behave round-trip e2e.
+
+## M11 — Accounts phase 2 (partial)
+
+Done:
+
+- `SHARED_ACCOUNTS_AUTHORITATIVE` (default off): passwords live **only** on the control-plane
+  account — the dual-write hook strips the hash from tenant user docs, and login has no
+  tenant-local fallback (unknown account → auth error).
+- Account → tenants mapping (`account_tenants` control-plane collection), maintained by the
+  dual-write hook; `accounts:tenants --email ...` CLI lists the tenants where an account has a
+  user. This is the data layer for a future client-side tenant switcher.
+
+Remaining (not implemented yet):
+
+- HTTP tenant admin API on a reserved non-tenant host (`TENANT_ADMIN_HOST`), super-admin gated.
+- `GET /accounts/me/tenants` tenant-switcher endpoint for the client.
+- Control-plane reset-password tokens (today reset tokens stay per tenant; with shared accounts a
+  reset done on one tenant propagates via the dual-write on `update_password`).
+- Manual "send to tenant" endpoint + `send_to_tenant` privilege for unpublished content
+  (automatic subscriber-based exchange from M10 works without it).
+- Behave e2e suites for provisioning and the exchange round-trip.
 
 ## Tests
 

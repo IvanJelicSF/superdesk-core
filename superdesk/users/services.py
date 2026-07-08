@@ -583,9 +583,13 @@ class DBUsersService(UsersService):
             updates["needs_activation"] = False
 
         # dual-write credentials to the control-plane account (noop unless SHARED_ACCOUNTS_ENABLED)
-        account_id = await link_user_credentials({**user, **updates})
+        merged = {**user, **updates}
+        account_id = await link_user_credentials(merged)
         if account_id is not None and user.get("account_id") != account_id:
             updates["account_id"] = account_id
+        if account_id is not None and "password" not in merged:
+            # authoritative mode: the account is the only credential store
+            updates.pop("password", None)
 
         await self.patch_async(user_id, updates=updates)
 

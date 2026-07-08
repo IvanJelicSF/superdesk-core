@@ -105,7 +105,8 @@ class GridFSMediaStorageTestCase(AsyncFlaskTestCase):
         gridfs = Mock()
         gridfs.put = Mock(return_value="y")
         gridfs.find = Mock(return_value=[])
-        self.app.media._fs["MONGO"] = gridfs
+        # the fs cache is keyed by (tenant_id, prefix) since multi-tenancy
+        self.app.media._fs[("default", "MONGO")] = gridfs
         return gridfs
 
     async def test_mimetype_detect(self):

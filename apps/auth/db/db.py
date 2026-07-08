@@ -26,6 +26,9 @@ class DbAuthService(AuthService):
             account = await accounts.find_account(credentials.get("username") or "")
             if account is not None:
                 return await self.authenticate_account(account, credentials, ignore_expire=ignore_expire)
+            if accounts.is_accounts_authoritative():
+                # phase 2: no tenant-local credentials fallback
+                raise CredentialsAuthError(credentials)
 
         user = await get_resource_service("auth_users").find_one_async(req=None, username=credentials.get("username"))
         if not user:
