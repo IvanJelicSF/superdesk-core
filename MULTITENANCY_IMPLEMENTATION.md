@@ -20,7 +20,7 @@ every code path, so single-tenant deployments behave exactly as before with zero
 | 7 | Websocket/notification tenant scoping | ✅ done |
 | 8 | Hardening (cache keys, locks, S3 subfolder, audit) | ✅ done |
 | 9 | Accounts phase 1 (shared credentials, additive) | ✅ done |
-| 10 | Cross-tenant content exchange | ⏳ in progress |
+| 10 | Cross-tenant content exchange | ✅ done |
 | 11 | Accounts phase 2 + tenant admin API | ⬜ pending |
 
 ## New settings
@@ -213,6 +213,44 @@ linked via a new optional `account_id` field.
 - Tests: `tests/core/tenants_accounts_test.py` (account CRUD against real control-plane mongo,
   username conflicts, dual-write hook, expiry; account-first authentication incl. fail-closed
   no-local-user, lazy linking, needs-reset).
+
+## M10 — Cross-tenant content exchange (`superdesk/tenants/exchange/`)
+
+Content flows tenant→tenant through the regular **publish→ingest pipeline**: a subscriber in the
+sender tenant with a destination of type `internal_tenant` (ninjs formatter) decides *what* flows
+(products/content filters as usual, publish_queue retry+audit included); the ingest side gives
+dedupe by guid, provenance and desk routing. If a tenant later moves to another deployment the
+same subscriber just switches to the `http_push` transmitter.
+
+- **Permissions**: both tenants must allow each other on their `exchange_partners` allowlist
+  (`{"tenant": id, "direction": "send"|"receive"|"both"}`) — checked on the sending side *and*
+  re-checked in the receiver. Managed via `tenants:update SLUG --add-partner X --direction both`
+  / `--remove-partner X`.
+- **Transmitter** (`transmitter.py`): `InternalTenantTransmitter`, registered as
+  `internal_tenant`. Destination config `{"tenant": <target>, "auto_fetch": bool, "desk", "stage"}`.
+  Validates partners, stamps provenance (`extra.original_tenant`, `extra.original_item_id`,
+  `source`; guid unchanged so re-sends update rather than duplicate), copies media, then enqueues
+  the delivery task with the target tenant's Celery header (the sender never writes to the target
+  db directly — the tenant boundary is crossed only via the media-storage API and the task queue).
+- **Media** (`media.py::copy_item_media`): rendition + association-rendition files are read in the
+  source context and written inside `tenant_context(target)`; `media`/`href` are rewritten in the
+  payload. On the target side `transfer_renditions`/ingest skip re-downloading because the media
+  ids resolve locally.
+- **Receiver** (`receiver.py`): Celery task `tenants.deliver_to_tenant` (tenant restored from the
+  task header by the M5 prologue) re-checks the allowlist, gets-or-creates a per-partner ingest
+  provider ("Tenant exchange: {source}", feeding service `tenant_exchange`, parser ninjs — so
+  routing schemes apply and items carry a proper source), converts the ninjs payload with
+  `NINJSFeedParser` (keeping the copied media references), and ingests via the standard
+  `ingest_items` path; optional auto-fetch to a desk/stage via `apps.archive.common.fetch_item`.
+- **Feeding service** (`feeding_service.py`): `tenant_exchange` is push-only (`_update` returns
+  nothing) — it exists so the providers validate and the ingest machinery has its hooks.
+- Registration: importing `superdesk.publish.transmitters` (done by `superdesk.publish.init_app`)
+  pulls in the exchange package, registering the transmitter, feeding service and Celery task.
+- Tests: `tests/core/tenants_exchange_test.py` — partner-direction model, media copy across tenant
+  stores with reference rewriting, transmitter validation (unknown/non-partner/one-way targets)
+  and the enqueue contract (tenant header, provenance fields).
+- Follow-up (moved to M11 scope): manual "send to tenant" endpoint + `send_to_tenant` privilege
+  for unpublished content; behave round-trip e2e.
 
 ## Tests
 

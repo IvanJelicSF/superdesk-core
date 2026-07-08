@@ -18,6 +18,7 @@ from .service import (
     get_tenant_doc,
     list_tenant_docs,
     set_tenant_status,
+    update_tenant,
     delete_tenant_record,
 )
 from .provisioning import provision_tenant, purge_tenant_storage
@@ -84,6 +85,36 @@ async def tenants_disable(slug):
 
     set_tenant_status(slug, TenantStatus.SUSPENDED)
     echo(f"Tenant '{slug}' disabled")
+
+
+@cli.command("tenants:update", tenant_command=False)
+@click.argument("slug")
+@click.option("--add-partner", help="Allow content exchange with the given tenant id.")
+@click.option(
+    "--direction",
+    type=click.Choice(["send", "receive", "both"]),
+    default="both",
+    help="Exchange direction for --add-partner.",
+)
+@click.option("--remove-partner", help="Remove the given tenant id from the exchange partners.")
+async def tenants_update(slug, add_partner, direction, remove_partner):
+    """Update a tenant's exchange partner allowlist."""
+
+    doc = get_tenant_doc(slug)
+    if doc is None:
+        raise click.UsageError(f"Tenant '{slug}' not found")
+
+    partners = [p for p in (doc.get("exchange_partners") or [])]
+    if remove_partner:
+        partners = [p for p in partners if p.get("tenant") != remove_partner]
+    if add_partner:
+        if get_tenant_doc(add_partner) is None:
+            raise click.UsageError(f"Partner tenant '{add_partner}' not found")
+        partners = [p for p in partners if p.get("tenant") != add_partner]
+        partners.append({"tenant": add_partner, "direction": direction})
+
+    update_tenant(slug, {"exchange_partners": partners})
+    echo(f"Tenant '{slug}' partners: {partners}")
 
 
 @cli.command("tenants:delete", tenant_command=False)

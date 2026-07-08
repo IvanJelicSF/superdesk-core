@@ -47,6 +47,8 @@ class Tenant:
     s3_subfolder: str | None = None
     config_overrides: Mapping[str, Any] = field(default_factory=dict)
     feature_flags: Mapping[str, bool] = field(default_factory=dict)
+    #: content-exchange partner allowlist: ({"tenant": id, "direction": "send"|"receive"|"both"}, ...)
+    exchange_partners: tuple = ()
     is_default: bool = False
 
     def __post_init__(self):
@@ -60,6 +62,18 @@ class Tenant:
     @property
     def is_active(self) -> bool:
         return self.status == TenantStatus.ACTIVE
+
+    def _partner_direction(self, tenant_id: str) -> str:
+        for partner in self.exchange_partners:
+            if partner.get("tenant") == tenant_id:
+                return partner.get("direction", "both")
+        return ""
+
+    def can_send_to(self, tenant_id: str) -> bool:
+        return self._partner_direction(tenant_id) in ("send", "both")
+
+    def can_receive_from(self, tenant_id: str) -> bool:
+        return self._partner_direction(tenant_id) in ("receive", "both")
 
     def feature_enabled(self, name: str, default: bool = True) -> bool:
         return bool(self.feature_flags.get(name, default))
@@ -75,6 +89,7 @@ class Tenant:
             s3_subfolder=doc.get("s3_subfolder"),
             config_overrides=doc.get("config_overrides") or {},
             feature_flags=doc.get("feature_flags") or {},
+            exchange_partners=tuple(doc.get("exchange_partners") or ()),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -87,4 +102,5 @@ class Tenant:
             "s3_subfolder": self.s3_subfolder,
             "config_overrides": dict(self.config_overrides),
             "feature_flags": dict(self.feature_flags),
+            "exchange_partners": list(self.exchange_partners),
         }
