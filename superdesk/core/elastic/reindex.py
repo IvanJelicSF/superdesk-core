@@ -19,7 +19,7 @@ from .sync_client import ElasticResourceClient
 
 
 def reindex(client: ElasticResourceClient, mapping: Dict[str, Any], requests_per_second: int = 1000):
-    alias = client.config.index
+    alias = client.index
     old_index = None
     try:
         indexes = client.elastic.indices.get_alias(name=alias)

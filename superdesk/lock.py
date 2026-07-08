@@ -7,7 +7,7 @@ from pymongo import MongoClient
 from werkzeug.local import LocalProxy
 
 from superdesk.core.mongo import get_mongo_client_config
-from superdesk.core import get_current_app
+from superdesk.core import get_current_app, get_current_tenant
 from superdesk.utc import utcnow
 from superdesk.mongolock import MongoLock, MongoLockException
 
@@ -42,8 +42,12 @@ class SuperdeskMongoLock(MongoLock):
 
 
 def _get_lock():
-    """Get mongolock instance using app mongodb."""
-    client_config, dbname = get_mongo_client_config(get_current_app().config)
+    """Get mongolock instance using app mongodb.
+
+    The ``_lock`` collection lives in the tenant's database, so lock names
+    (item locks, task locks) are isolated between tenants.
+    """
+    client_config, dbname = get_mongo_client_config(get_current_app().config, tenant=get_current_tenant())
     client = MongoClient(**client_config)
     collection = client.get_database(dbname).get_collection("_lock")
     return SuperdeskMongoLock(collection=collection)

@@ -24,7 +24,7 @@ from botocore.client import Config
 from werkzeug.datastructures import Range, FileStorage
 from bson import ObjectId
 
-from superdesk.core import get_config
+from superdesk.core import get_config, get_current_tenant
 from superdesk.core.types import SuperdeskFile, SuperdeskAsyncFile
 from superdesk.media.media_operations import download_file_from_url, download_file_from_url_async
 from superdesk.utc import query_datetime
@@ -210,10 +210,24 @@ class AmazonMediaStorage(SuperdeskMediaStorage):
 
         return await getattr(self.client_async, method)(**kw)
 
+    def get_subfolder(self) -> str:
+        """S3 key prefix: the configured subfolder plus the tenant's subfolder (shared bucket)."""
+        subfolder = self.app.config.get("AMAZON_S3_SUBFOLDER") or ""
+        if subfolder.lower() == "false":
+            subfolder = ""
+        subfolder = subfolder.strip("/")
+
+        tenant = get_current_tenant()
+        if not tenant.is_default:
+            tenant_folder = (tenant.s3_subfolder or tenant.id).strip("/")
+            subfolder = f"{subfolder}/{tenant_folder}" if subfolder else tenant_folder
+
+        return subfolder
+
     def get_key(self, key):
-        subfolder = self.app.config.get("AMAZON_S3_SUBFOLDER", "false")
-        if key and subfolder and subfolder.lower() != "false":
-            key = "%s/%s" % (subfolder.strip("/"), key)
+        subfolder = self.get_subfolder()
+        if key and subfolder:
+            key = "%s/%s" % (subfolder, key)
         return key
 
     def get(self, id_or_filename, resource=None):
@@ -274,7 +288,7 @@ class AmazonMediaStorage(SuperdeskMediaStorage):
     def _get_all_keys_in_batches(self):
         """Return the list of all keys from the bucket in batches."""
         NextMarker = ""
-        subfolder = self.app.config.get("AMAZON_S3_SUBFOLDER") or ""
+        subfolder = self.get_subfolder()
         while True:
             objects = self.call("list_objects", Marker=NextMarker, MaxKeys=MAX_KEYS, Prefix=subfolder)
 
@@ -288,7 +302,7 @@ class AmazonMediaStorage(SuperdeskMediaStorage):
     async def _get_all_keys_in_batches_async(self):
         """Return the list of all keys from the bucket in batches."""
         NextMarker = ""
-        subfolder = self.app.config.get("AMAZON_S3_SUBFOLDER") or ""
+        subfolder = self.get_subfolder()
         while True:
             objects = await self.call_async("list_objects", Marker=NextMarker, MaxKeys=MAX_KEYS, Prefix=subfolder)
 

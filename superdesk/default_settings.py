@@ -218,6 +218,21 @@ ARCHIVED_URI = env("ARCHIVED_URI", "mongodb://localhost/%s" % ARCHIVED_DBNAME)
 CONTENTAPI_MONGO_DBNAME = env("CONTENTAPI_MONGO_DBNAME", "contentapi")
 CONTENTAPI_MONGO_URI = env("CONTENTAPI_MONGO_URI", "mongodb://localhost/%s" % CONTENTAPI_MONGO_DBNAME)
 
+#: serve multiple tenants from this deployment; when off (default) the app runs
+#: in single-tenant mode using a synthetic "default" tenant backed by the
+#: ``MONGO_*``/``ELASTICSEARCH_*`` config, with no behavior change
+MULTI_TENANT_ENABLED = strtobool(env("MULTI_TENANT_ENABLED", "false"))
+
+#: control-plane mongo db storing the tenants registry, never a tenant database
+TENANTS_MONGO_DBNAME = env("TENANTS_MONGO_DBNAME", "superdesk_tenants")
+TENANTS_MONGO_URI = env("TENANTS_MONGO_URI", "mongodb://localhost/%s" % TENANTS_MONGO_DBNAME)
+
+#: how long (seconds) tenant registry lookups are cached in process
+TENANTS_CACHE_TTL = int(env("TENANTS_CACHE_TTL", "60"))
+
+#: path prefixes served without tenant resolution (health checks etc.)
+TENANT_EXEMPT_PATHS: list = []
+
 #: elastic url
 ELASTICSEARCH_URL = env("ELASTICSEARCH_URL", "http://localhost:9200")
 CONTENTAPI_ELASTICSEARCH_URL = env("CONTENTAPI_ELASTICSEARCH_URL", ELASTICSEARCH_URL)

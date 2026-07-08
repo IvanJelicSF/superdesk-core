@@ -110,7 +110,7 @@ class ElasticResources:
 
     def get_elastic_index_name(self, resource_name: str) -> str:
         try:
-            return self._resource_clients[resource_name].config.index
+            return self._resource_clients[resource_name].index
         except (KeyError, TypeError):
             # Fallback to trying eve-elastic
             return self.app.wsgi.data.elastic._resource_index(resource_name)
@@ -216,11 +216,11 @@ class ElasticResources:
                 self.app.wsgi.config.get("SCHEMA_UPDATE", {}).get(resource_name),
             )
 
-            if not resource_client.elastic.indices.exists(index=resource_client.config.index):
+            if not resource_client.elastic.indices.exists(index=resource_client.index):
                 self._create_index_from_alias(resource_client, mapping)
             elif resource_client.config.settings:
                 self._put_settings(resource_client)
-                resource_client.elastic.indices.put_mapping(index=resource_client.config.index, body=mapping)
+                resource_client.elastic.indices.put_mapping(index=resource_client.index, body=mapping)
         except RequestError:
             if self.app.wsgi.config.get("DEBUG") or raise_on_mapping_error:
                 raise
@@ -252,7 +252,7 @@ class ElasticResources:
                 continue
 
             resource_client = self.get_client(config.name)
-            index_alias = resource_client.config.index
+            index_alias = resource_client.index
 
             # skip if resource does not belong the provided index
             if index_prefix and index_alias != f"{index_prefix}_{config.name}":
@@ -272,16 +272,17 @@ class ElasticResources:
     def _create_index_from_alias(self, resource_client: ElasticResourceClient, mapping: dict):
         try:
             config = resource_client.config
-            index = generate_index_name(config.index)
+            alias = resource_client.index
+            index = generate_index_name(alias)
             resource_client.elastic.indices.create(
                 index=index,
                 body={
-                    "aliases": {config.index: {}},
+                    "aliases": {alias: {}},
                     "settings": {"index": config.settings["settings"]} if config.settings else {},
                     "mappings": mapping,
                 },
             )
-            logger.info(f"- Created index alias={config.index} index={index}")
+            logger.info(f"- Created index alias={alias} index={index}")
         except TransportError:  # index exists
             pass
 
@@ -292,7 +293,7 @@ class ElasticResources:
         :raises KeyError: If the resource is not registered for use with Elasticsearch
         """
 
-        settings = resource_client.elastic.indices.get_settings(index=resource_client.config.index)
+        settings = resource_client.elastic.indices.get_settings(index=resource_client.index)
         return next(iter(settings.values()))
 
     def put_settings(self, resource_client: ElasticResourceClient):
@@ -316,11 +317,11 @@ class ElasticResources:
     def _put_settings(self, resource_client: ElasticResourceClient):
         """Modify index settings"""
 
-        resource_client.elastic.indices.close(index=resource_client.config.index)
+        resource_client.elastic.indices.close(index=resource_client.index)
         resource_client.elastic.indices.put_settings(
-            index=resource_client.config.index, body=resource_client.config.settings or {}
+            index=resource_client.index, body=resource_client.config.settings or {}
         )
-        resource_client.elastic.indices.open(index=resource_client.config.index)
+        resource_client.elastic.indices.open(index=resource_client.index)
 
     def search(self, resource_names: List[str], query: Dict[str, Any]) -> Dict[str, Any]:
         """Search Elasticsearch across multiple indexes
@@ -347,7 +348,7 @@ class ElasticResources:
             raise ValueError("Multiple prefixes found, searching multiple clusters not supported")
 
         client = self.get_client(resource_names[0])
-        indexes = [self.get_client(resource_name).config.index for resource_name in resource_names]
+        indexes = [self.get_client(resource_name).index for resource_name in resource_names]
         return client.search(query, indexes)
 
     async def search_async(self, resource_names: List[str], query: Dict[str, Any]) -> Dict[str, Any]:
@@ -375,7 +376,7 @@ class ElasticResources:
             raise ValueError("Multiple prefixes found, searching multiple clusters not supported")
 
         client = self.get_client_async(resource_names[0])
-        indexes = [self.get_client(resource_name).config.index for resource_name in resource_names]
+        indexes = [self.get_client(resource_name).index for resource_name in resource_names]
         return await client.search(query, indexes)
 
     def find_by_id(self, item_id: str, resource_names: List[str]) -> Optional[Dict[str, Any]]:

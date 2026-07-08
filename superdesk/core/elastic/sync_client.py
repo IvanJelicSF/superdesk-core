@@ -35,7 +35,7 @@ class ElasticResourceClient(BaseElasticResourceClient):
             ids.append(doc_id)
 
         if self.config.force_refresh:
-            self.elastic.indices.refresh(index=self.config.index)
+            self.elastic.indices.refresh(index=self.index)
 
         return ids
 
@@ -48,7 +48,7 @@ class ElasticResourceClient(BaseElasticResourceClient):
 
         success, failed = bulk(self.elastic, **self._get_bulk_insert_args(docs))
         if self.config.force_refresh:
-            self.elastic.indices.refresh(index=self.config.index)
+            self.elastic.indices.refresh(index=self.index)
 
         # Cast `failed` to dict, because if we pass `stats_only=False`, then we get the full document
         # where as if `stats_only=True`, then `failed` is just a number
@@ -66,7 +66,7 @@ class ElasticResourceClient(BaseElasticResourceClient):
 
         success, failed = bulk(self.elastic, **self._get_bulk_update_args(ids, updates))
         if self.config.force_refresh:
-            self.elastic.indices.refresh(index=self.config.index)
+            self.elastic.indices.refresh(index=self.index)
 
         # Cast `failed` to dict, because if we pass `stats_only=False`, then we get the full document
         # where as if `stats_only=True`, then `failed` is just a number
@@ -147,7 +147,7 @@ class ElasticResourceClient(BaseElasticResourceClient):
 
         try:
             response = self.elastic.get(
-                index=self.config.index, id=item_id, **(self._get_projected_fields_from_param(projection) or {})
+                index=self.index, id=item_id, **(self._get_projected_fields_from_param(projection) or {})
             )
 
             if "exists" in response:
@@ -164,7 +164,7 @@ class ElasticResourceClient(BaseElasticResourceClient):
             if tex.error == "routing_missing_exception" or "RoutingMissingException" in tex.error:
                 try:
                     response = self.elastic.search(
-                        index=self.config.index,
+                        index=self.index,
                         body={"query": {"bool": {"must": [{"term": {"_id": item_id}}]}}},
                         size=1,
                         **(self._get_projected_fields_from_param(projection) or {}),
@@ -214,7 +214,7 @@ class ElasticResourceClient(BaseElasticResourceClient):
 
         return self._parse_hits(
             self.elastic.mget(
-                index=self.config.index,
+                index=self.index,
                 body={"ids": ids},
             )
         )

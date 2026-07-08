@@ -1,9 +1,15 @@
+from typing import Optional
+
 from pymongo import uri_parser
 
 from superdesk.core.types import MongoClientConfig
+from superdesk.core.tenants.models import Tenant
+from superdesk.core.tenants.naming import tenant_db_name
 
 
-def get_mongo_client_config(app_config: dict, prefix: str = "MONGO") -> tuple[dict, str]:
+def get_mongo_client_config(
+    app_config: dict, prefix: str = "MONGO", tenant: Optional[Tenant] = None
+) -> tuple[dict, str]:
     config = MongoClientConfig.create_from_dict(app_config, prefix)
 
     client_kwargs: dict = {
@@ -70,5 +76,11 @@ def get_mongo_client_config(app_config: dict, prefix: str = "MONGO") -> tuple[di
                 auth_kwargs["authSource"] = config.auth_source
             if config.auth_mechanism_properties is not None:
                 auth_kwargs["authMechanismProperties"] = config.auth_mechanism_properties
+
+    # tenant db name overrides the configured one at the very end, so authSource
+    # keeps deriving from the base URI/config; multi-tenant deployments with mongo
+    # auth must therefore set authSource explicitly in the URI
+    if tenant is not None and not tenant.is_default:
+        dbname = tenant_db_name(tenant, prefix)
 
     return {**client_kwargs, **auth_kwargs}, dbname

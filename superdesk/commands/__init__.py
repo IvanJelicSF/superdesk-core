@@ -12,6 +12,7 @@ from . import data_manipulation  # noqa
 from . import schema  # noqa
 from .get_module_schema import get_module_schema  # noqa
 from .async_cli import cli, commands_blueprint  # noqa
+from superdesk.tenants import commands as tenants_commands  # noqa
 import superdesk
 
 

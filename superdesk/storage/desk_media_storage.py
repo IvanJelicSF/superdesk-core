@@ -22,7 +22,7 @@ import hashlib
 from eve.io.mongo.media import GridFSMediaStorage
 from motor.motor_asyncio import AsyncIOMotorGridFSBucket, AsyncIOMotorGridOut
 
-from superdesk.core import get_current_app, get_current_async_app
+from superdesk.core import get_current_app, get_current_async_app, get_current_tenant
 from superdesk.core.types import SuperdeskFile, SuperdeskAsyncFile
 from superdesk.errors import SuperdeskApiError
 from . import SuperdeskMediaStorage
@@ -285,29 +285,34 @@ class SuperdeskGridFSMediaStorage(SuperdeskMediaStorage, GridFSMediaStorage):
         resource = resource or "upload"
         driver = get_current_app().data.mongo
         px = driver.current_mongo_prefix(resource)
-        if px not in self._fs:
-            self._fs[px] = gridfs.GridFS(driver.pymongo(prefix=px).db)
-        return self._fs[px]
+        # the db handle (and so the GridFS bucket) is tenant-scoped
+        fs_key = (get_current_tenant().id, px)
+        if fs_key not in self._fs:
+            self._fs[fs_key] = gridfs.GridFS(driver.pymongo(prefix=px).db)
+        return self._fs[fs_key]
 
     def fs_async(self, resource=None) -> AsyncIOMotorGridFSBucket:
         resource = resource or "upload"
         mongo_async = get_current_async_app().mongo
+        tenant_id = get_current_tenant().id
 
         try:
             # Attempt to get the driver from async app first
             px = mongo_async.get_resource_config(resource).prefix
-            if px not in self._fs_async:
+            fs_key = (tenant_id, px)
+            if fs_key not in self._fs_async:
                 _, db = mongo_async.get_client_async(resource)
-                self._fs_async[px] = AsyncIOMotorGridFSBucket(db)
+                self._fs_async[fs_key] = AsyncIOMotorGridFSBucket(db)
         except KeyError:
             # Fallback to using the Eve app to get the driver
             driver = get_current_app().data.mongo
             px = driver.current_mongo_prefix(resource)
-            if px not in self._fs_async:
+            fs_key = (tenant_id, px)
+            if fs_key not in self._fs_async:
                 db = get_current_async_app().mongo.get_db_async_from_prefix(px)
-                self._fs_async[px] = AsyncIOMotorGridFSBucket(db)
+                self._fs_async[fs_key] = AsyncIOMotorGridFSBucket(db)
 
-        return self._fs_async[px]
+        return self._fs_async[fs_key]
 
     def remove_unreferenced_files(self, existing_files, resource=None):
         """Get the files from Grid FS and compare against existing files and delete the orphans."""

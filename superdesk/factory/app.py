@@ -68,6 +68,7 @@ from superdesk.core.types import (
     Response,
 )
 from superdesk.core.app import SuperdeskAsyncApp
+from superdesk.core.tenants.middleware import setup_tenant_middleware
 from superdesk.core.resources import ResourceRestEndpoints, ResourceConfig
 from superdesk.core.resources.validators import convert_pydantic_validation_error_for_response
 from superdesk.core.web import NullEndpoint
@@ -250,6 +251,8 @@ class SuperdeskEve(eve.Eve):
         super().__init__(**kwargs)
         self.setup_sentry()
         self.async_app = SuperdeskAsyncApp(self)
+        # register first, so the tenant is resolved before auth and any other request hooks
+        setup_tenant_middleware(self)
         self.teardown_request(self._after_each_request)
 
         self.on_get_api_root += self.extend_eve_home_endpoint

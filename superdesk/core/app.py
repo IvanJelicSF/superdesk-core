@@ -15,6 +15,7 @@ from typing_extensions import TypeVar
 from superdesk.core.types import WSGIApp
 
 from .types import DefaultNoValue
+from .tenants.context import get_tenant_config_override, NO_OVERRIDE
 from .auth.user_auth import UserAuthProtocol
 from .privileges import PrivilegesRegistry
 from .signals import SignalGroup, Signal
@@ -36,6 +37,10 @@ def get_app_config(key: str, default: Any | None = None) -> Any | None:
     :return: The value of the requested configuration key, or the default value if the key is not found.
     :raises RuntimeError: If no application context or global application is running.
     """
+
+    override = get_tenant_config_override(key)
+    if override is not NO_OVERRIDE:
+        return override
 
     if _global_app is not None:
         return _global_app.wsgi.config.get(key, default)
@@ -89,6 +94,9 @@ class SuperdeskAsyncApp(SignalGroup):
 
     resources: "Resources"
 
+    #: TenantRegistry instance for control-plane tenant lookups
+    tenants: "TenantRegistry"
+
     auth: UserAuthProtocol
 
     privileges: PrivilegesRegistry
@@ -104,6 +112,7 @@ class SuperdeskAsyncApp(SignalGroup):
         self.resources = Resources(self)
         self.mongo = MongoResources(self)
         self.elastic = ElasticResources(self)
+        self.tenants = TenantRegistry(self)
         self.auth = self.load_auth_module()
         self._store_app()
         self.privileges = PrivilegesRegistry()
@@ -229,6 +238,7 @@ class SuperdeskAsyncApp(SignalGroup):
 
         self.on_app_shutdown.send(self)
         self.mongo.stop()
+        self.tenants.stop()
         self.resources.stop()
         self._imported_modules.clear()
         self._remove_app()
@@ -297,3 +307,4 @@ from .module import Module  # noqa: E402
 from .mongo import MongoResources  # noqa: E402
 from .elastic import ElasticResources  # noqa: E402
 from .resources import Resources  # noqa: E402
+from .tenants.registry import TenantRegistry  # noqa: E402

@@ -18,10 +18,12 @@ from eve.io.mongo import Mongo
 from eve.utils import ParsedRequest
 from eve_elastic import Elastic, InvalidSearchString  # noqa
 from superdesk.core import get_current_async_app, get_config
+from superdesk.core.tenants import get_current_tenant
+from superdesk.core.tenants.eve_shims import TenantMongo, TenantMongoAsync, TenantElastic, TenantElasticAsync
 from superdesk.lock import lock, unlock
 from superdesk.json_utils import SuperdeskJSONEncoder
 
-from .eve_async import MongoAsync, ElasticAsync
+from .eve_async import MongoAsync, ElasticAsync  # noqa
 
 
 class SuperdeskDataLayer(DataLayer):
@@ -41,14 +43,14 @@ class SuperdeskDataLayer(DataLayer):
 
     def init_app(self, app):
         app.data = self  # app.data must be set for locks to work
-        self.mongo = Mongo(app)
-        self.mongo_async = MongoAsync(app)
+        self.mongo = TenantMongo(app)
+        self.mongo_async = TenantMongoAsync(app)
         self.driver = self.mongo.driver
         self.storage = self.driver
-        self.elastic = Elastic(
+        self.elastic = TenantElastic(
             app, serializer=SuperdeskJSONEncoder(), skip_index_init=True, retry_on_timeout=True, max_retries=3
         )
-        self.elastic_async = ElasticAsync(
+        self.elastic_async = TenantElasticAsync(
             app, serializer=SuperdeskJSONEncoder(), skip_index_init=True, retry_on_timeout=True, max_retries=3
         )
 
@@ -62,7 +64,10 @@ class SuperdeskDataLayer(DataLayer):
         Thus mongo must be already setup before running this.
         """
         async with app.app_context():
-            if lock("elastic", expire=10):
+            # lock is tenant-scoped so index init for one tenant doesn't block/skip others
+            tenant = get_current_tenant()
+            lock_name = "elastic" if tenant.is_default else f"elastic:{tenant.id}"
+            if lock(lock_name, expire=10):
                 try:
                     resources_indexed = get_current_async_app().elastic.init_all_indexes(
                         raise_on_mapping_error=raise_on_mapping_error
@@ -73,7 +78,7 @@ class SuperdeskDataLayer(DataLayer):
                         self.elastic.init_index(resource, raise_on_mapping_error=raise_on_mapping_error)
 
                 finally:
-                    unlock("elastic")
+                    unlock(lock_name)
 
     def find(self, resource, req, lookup, perform_count=True):
         cursor = superdesk.get_resource_service(resource).get(req=req, lookup=lookup)

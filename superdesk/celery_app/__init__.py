@@ -22,6 +22,7 @@ from .hooks import connect_signals
 
 from superdesk.logging import logger
 from superdesk.core import get_current_app, get_app_config
+from superdesk.core.tenants.celery import setup_celery_tenant_signals, rewrite_beat_schedule_for_tenants
 
 if TYPE_CHECKING:
     from superdesk.factory.app import SuperdeskEve
@@ -52,6 +53,13 @@ def init_celery(app: "SuperdeskEve") -> None:
     # Allow kombu's own JSON encoder to handle ObjectId (e.g. in celery inspection commands)
     # Registered here rather than at module level to keep startup ordering explicit.
     register_type(ObjectId, "bson.objectid", str, ObjectId)
+
+    if app.config.get("MULTI_TENANT_ENABLED"):
+        setup_celery_tenant_signals()
+        if IS_BEAT_PROCESS:
+            app.config["CELERY_BEAT_SCHEDULE"] = rewrite_beat_schedule_for_tenants(
+                app.config.get("CELERY_BEAT_SCHEDULE") or {}
+            )
 
     if not IS_BEAT_PROCESS and app.config.get("CELERY_USE_ASYNC_WORKER"):
         celery.task_cls = CeleryAsyncWorkerTask
@@ -136,3 +144,6 @@ def _update_subtask_progress(task_id, current=None, total=None, done=None):
         return task_id, crt_current, crt_total
     finally:
         redis_db.disconnect()
+
+
+from . import tenant_tasks  # noqa: E402,F401  -- registers the tenants.fan_out beat dispatcher task

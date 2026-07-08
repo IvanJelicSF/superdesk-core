@@ -17,6 +17,7 @@ import json
 
 from datetime import datetime
 from superdesk.core import get_current_app, get_current_async_app
+from superdesk.core.tenants import is_multi_tenant_enabled, try_get_current_tenant
 from superdesk.utils import json_serialize_datetime_objectId
 from superdesk.websockets_comms import SocketMessageProducer
 from superdesk.types import WebsocketMessageData, WebsocketMessageFilterConditions
@@ -51,6 +52,13 @@ def init_app(app) -> None:
 
 def _create_socket_message(**kwargs) -> str:
     """Send out all kwargs as json string."""
+    if is_multi_tenant_enabled():
+        tenant = try_get_current_tenant()
+        if tenant is not None:
+            kwargs.setdefault("tenant", tenant.id)
+        else:
+            # the websocket server drops untagged messages in multi-tenant mode (fail closed)
+            logger.warning("socket message %s created without a tenant in context", kwargs.get("event"))
     kwargs.setdefault("_created", datetime.utcnow().isoformat())
     kwargs.setdefault("_process", os.getpid())
     return json.dumps(kwargs, default=json_serialize_datetime_objectId)

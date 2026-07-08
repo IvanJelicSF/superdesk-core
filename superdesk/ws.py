@@ -37,6 +37,7 @@ def create_server(config):
             exchange_name,
             sentry_dsn=os.environ.get("SENTRY_DSN"),
             sentry_traces_sample_rate=float(os.environ.get("SENTRY_TRACES_SAMPLE_RATE", "0")) or None,
+            multi_tenant=bool(config.get("MULTI_TENANT_ENABLED")),
         )
         comms.run_server()
     except Exception:
@@ -49,6 +50,7 @@ if __name__ == "__main__":
         "WS_PORT": int(os.environ.get("WS_PORT") or "5100"),
         "BROKER_URL": os.environ.get("CELERY_BROKER_URL") or os.environ.get("REDIS_URL") or "redis://localhost:6379",
         "WEBSOCKET_EXCHANGE": "superdesk_notification",
+        "MULTI_TENANT_ENABLED": (os.environ.get("MULTI_TENANT_ENABLED") or "").lower() in ("1", "true", "yes", "on"),
     }
 
     create_server(config)

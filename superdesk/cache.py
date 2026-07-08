@@ -96,18 +96,31 @@ class SuperdeskCacheBackend(hermes.backend.AbstractBackend):
 
         return self.app.extensions["superdesk_cache"]
 
+    def _prefix_key(self, key: str) -> str:
+        """Scope cache keys to the bound tenant so cached db-derived data can't leak across tenants."""
+        from superdesk.core.tenants import try_get_current_tenant
+
+        tenant = try_get_current_tenant()
+        return f"tenant:{tenant.id}:{key}" if tenant is not None else key
+
     def lock(self, key):
-        return self._backend.lock(key)
+        return self._backend.lock(self._prefix_key(key))
 
     def save(self, mapping, *, ttl=None):
-        return self._backend.save(mapping, ttl=ttl)
+        return self._backend.save({self._prefix_key(key): value for key, value in mapping.items()}, ttl=ttl)
 
     def load(self, keys):
-        val = self._backend.load(keys)
-        return val
+        if isinstance(keys, str):
+            return self._backend.load(self._prefix_key(keys))
+
+        prefixed = {self._prefix_key(key): key for key in keys}
+        values = self._backend.load(list(prefixed.keys()))
+        return {prefixed[key]: value for key, value in (values or {}).items()}
 
     def remove(self, keys):
-        return self._backend.remove(keys)
+        if isinstance(keys, str):
+            return self._backend.remove(self._prefix_key(keys))
+        return self._backend.remove([self._prefix_key(key) for key in keys])
 
     def clean(self):
         return self._backend.clean()

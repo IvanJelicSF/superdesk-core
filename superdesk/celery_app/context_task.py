@@ -10,6 +10,7 @@ from typing import Any
 from superdesk.logging import logger
 from superdesk.errors import SuperdeskError
 from superdesk.celery_app.serializer import CELERY_SERIALIZER_NAME
+from superdesk.core.tenants.celery import task_tenant_context
 
 
 celery_wsgi_instance: ContextVar[Quart] = ContextVar("celery_wsgi_instance")
@@ -73,11 +74,13 @@ class HybridAppContextTask(Task):
         # all exceptions are managed and logged regardless of where they occur within the event loop
         async def wrapper() -> Any | None:
             try:
-                if not has_app_context():
-                    async with self.get_current_app().app_context():
+                # restore the tenant from the task headers before touching any app/db state
+                with task_tenant_context(self):
+                    if not has_app_context():
+                        async with self.get_current_app().app_context():
+                            return await _handle_run_task(self.run, *args, **kwargs)
+                    else:
                         return await _handle_run_task(self.run, *args, **kwargs)
-                else:
-                    return await _handle_run_task(self.run, *args, **kwargs)
 
             except self.app_errors as e:
                 self.handle_exception(e)

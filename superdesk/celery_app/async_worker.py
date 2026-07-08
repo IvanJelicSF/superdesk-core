@@ -10,6 +10,7 @@ from celery.exceptions import SoftTimeLimitExceeded, TimeLimitExceeded
 import werkzeug
 
 from superdesk.errors import SuperdeskError
+from superdesk.core.tenants.celery import task_tenant_context
 from .context_task import HybridAppContextWorkerTask
 
 if TYPE_CHECKING:
@@ -259,6 +260,17 @@ class CeleryAsyncWorkerThread(threading.Thread):
         :raises asyncio.TimeoutError: internally by asyncio when the soft time limit is exceeded.
         """
 
+        assert self._loop is not None, "Event loop is not ready"
+
+        # restore the tenant inside this coroutine: each task coroutine has its own
+        # context copy on the shared loop, so concurrent tasks for different tenants
+        # cannot leak into each other
+        with task_tenant_context(task):
+            return await self._run_task_in_app_context(task, *args, **kwargs)
+
+    async def _run_task_in_app_context(
+        self, task: CeleryAsyncWorkerTask, *args, **kwargs
+    ) -> tuple[asyncio.Task | None, Any]:
         assert self._loop is not None, "Event loop is not ready"
         execution_task: asyncio.Task | None = None
 

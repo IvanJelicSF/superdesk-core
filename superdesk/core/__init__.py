@@ -11,6 +11,7 @@
 from quart import json
 from .app import get_config, get_app_config, get_current_app, get_current_async_app, get_current_auth
 from .signals import AsyncSignal
+from .tenants import get_current_tenant, try_get_current_tenant, tenant_context
 
 
 __all__ = [
@@ -21,4 +22,7 @@ __all__ = [
     "get_app_config",
     "get_current_auth",
     "AsyncSignal",
+    "get_current_tenant",
+    "try_get_current_tenant",
+    "tenant_context",
 ]

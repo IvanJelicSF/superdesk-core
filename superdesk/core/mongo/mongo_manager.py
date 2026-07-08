@@ -20,6 +20,7 @@ from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase, AsyncI
 
 from superdesk.resource_fields import VERSION_ID_FIELD, CURRENT_VERSION
 from superdesk.core.types import MongoIndexOptions, MongoResourceConfig
+from superdesk.core.tenants.context import get_current_tenant
 
 from .utils import get_mongo_client_config
 
@@ -28,8 +29,12 @@ logger = logging.getLogger(__name__)
 
 class MongoResources:
     _resource_configs: Dict[str, MongoResourceConfig]
-    _mongo_clients: Dict[str, Tuple[MongoClient, Database]]
-    _mongo_clients_async: Dict[str, Tuple[AsyncIOMotorClient, AsyncIOMotorDatabase]]
+    #: clients are cached per config prefix (one per cluster URI, shared by all tenants)
+    _mongo_clients: Dict[str, MongoClient]
+    _mongo_clients_async: Dict[str, AsyncIOMotorClient]
+    #: database handles are cached per (tenant_id, prefix, versioning)
+    _mongo_dbs: Dict[Tuple[str, str, bool], Database]
+    _mongo_dbs_async: Dict[Tuple[str, str, bool], AsyncIOMotorDatabase]
 
     #: A reference back to the parent app, for configuration purposes
     app: "SuperdeskAsyncApp"
@@ -38,6 +43,8 @@ class MongoResources:
         self._resource_configs = {}
         self._mongo_clients = {}
         self._mongo_clients_async = {}
+        self._mongo_dbs = {}
+        self._mongo_dbs_async = {}
         self.app = app
 
         # Import the module from here so we aren't importing from ``core.resources`` module in ``core.mongo``
@@ -75,24 +82,27 @@ class MongoResources:
         return source_name if not versioning else f"{source_name}_versions"
 
     def reset_all_async_connections(self):
-        for client, _db in self._mongo_clients_async.values():
+        for client in self._mongo_clients_async.values():
             client.close()
 
         self._mongo_clients_async.clear()
+        self._mongo_dbs_async.clear()
         for config in self.app.resources.get_all_configs():
             self.get_client_async(config.name)
 
     def close_all_clients(self):
         """Closes all clients (sync and async) to the Mongo database(s)"""
 
-        for client, _db in self._mongo_clients.values():
+        for client in self._mongo_clients.values():
             client.close()
 
-        for client, _db in self._mongo_clients_async.values():
+        for client in self._mongo_clients_async.values():
             client.close()
 
         self._mongo_clients.clear()
         self._mongo_clients_async.clear()
+        self._mongo_dbs.clear()
+        self._mongo_dbs_async.clear()
 
     def stop(self):
         """Disconnects all clients and de-registers all resource configs"""
@@ -116,13 +126,23 @@ class MongoResources:
         if versioning and not mongo_config.versioning:
             raise RuntimeError("Attempting to get version client on a resource where it's disabled")
 
-        if not self._mongo_clients.get(mongo_config.prefix):
-            client_config, dbname = get_mongo_client_config(self.app.wsgi.config, mongo_config.prefix)
-            client: MongoClient = MongoClient(**client_config)
-            db = client.get_database(dbname if not versioning else f"{dbname}_versions")
-            self._mongo_clients[mongo_config.prefix] = (client, db)
+        tenant = get_current_tenant()
+        prefix = mongo_config.prefix
 
-        return self._mongo_clients[mongo_config.prefix]
+        client = self._mongo_clients.get(prefix)
+        if client is None:
+            client_config, _dbname = get_mongo_client_config(self.app.wsgi.config, prefix)
+            client = MongoClient(**client_config)
+            self._mongo_clients[prefix] = client
+
+        db_key = (tenant.id, prefix, versioning)
+        db = self._mongo_dbs.get(db_key)
+        if db is None:
+            _client_config, dbname = get_mongo_client_config(self.app.wsgi.config, prefix, tenant)
+            db = client.get_database(dbname if not versioning else f"{dbname}_versions")
+            self._mongo_dbs[db_key] = db
+
+        return client, db
 
     def get_db(self, resource_name: str, versioning: bool = False) -> Database:
         """Get a synchronous database connection from a registered resource
@@ -241,13 +261,23 @@ class MongoResources:
         if versioning and not mongo_config.versioning:
             raise RuntimeError("Attempting to get version client on a resource where it's disabled")
 
-        if not self._mongo_clients_async.get(mongo_config.prefix):
-            client_config, dbname = get_mongo_client_config(self.app.wsgi.config, mongo_config.prefix)
-            client: AsyncIOMotorClient = AsyncIOMotorClient(**client_config)
-            db = client.get_database(dbname if not versioning else f"{dbname}_versions")
-            self._mongo_clients_async[mongo_config.prefix] = (client, db)
+        tenant = get_current_tenant()
+        prefix = mongo_config.prefix
 
-        return self._mongo_clients_async[mongo_config.prefix]
+        client = self._mongo_clients_async.get(prefix)
+        if client is None:
+            client_config, _dbname = get_mongo_client_config(self.app.wsgi.config, prefix)
+            client = AsyncIOMotorClient(**client_config)
+            self._mongo_clients_async[prefix] = client
+
+        db_key = (tenant.id, prefix, versioning)
+        db = self._mongo_dbs_async.get(db_key)
+        if db is None:
+            _client_config, dbname = get_mongo_client_config(self.app.wsgi.config, prefix, tenant)
+            db = client.get_database(dbname if not versioning else f"{dbname}_versions")
+            self._mongo_dbs_async[db_key] = db
+
+        return client, db
 
     def get_db_async(self, resource_name: str, versioning: bool = False) -> AsyncIOMotorDatabase:
         """Get an asynchronous database connection from a registered resource
@@ -261,7 +291,7 @@ class MongoResources:
         return self.get_client_async(resource_name, versioning)[1]
 
     def get_db_async_from_prefix(self, prefix: str):
-        client_config, dbname = get_mongo_client_config(self.app.wsgi.config, prefix)
+        client_config, dbname = get_mongo_client_config(self.app.wsgi.config, prefix, get_current_tenant())
         client: AsyncIOMotorClient = AsyncIOMotorClient(**client_config)
         return client.get_database(dbname)
 

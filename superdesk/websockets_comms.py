@@ -278,12 +278,15 @@ class SocketCommunication:
         sentry_dsn: Optional[str] = None,
         sentry_traces_sample_rate: Optional[float] = None,
         debug: bool | None = None,
+        multi_tenant: bool = False,
     ):
         self.host = host
         self.port = int(port)
         self.broker_url = broker_url
         self.exchange_name = exchange_name
         self.subscribe_prefix = subscribe_prefix
+        self.multi_tenant = multi_tenant
+        self.client_tenants: Dict[UUID, Optional[str]] = {}
         self.client_url_args: Dict[UUID, Dict[str, str]] = {}
         self.messages: Dict[str, datetime] = {}
         self.clients = set()
@@ -301,6 +304,13 @@ class SocketCommunication:
     def _add_client(self, websocket: ServerConnection):
         self.clients.add(websocket)
 
+        # tenant resolution by host: the first DNS label of the Host header must
+        # equal the tenant id (clients connect via the tenant's subdomain)
+        request_host = ""
+        if websocket.request is not None and websocket.request.headers is not None:
+            request_host = (websocket.request.headers.get("Host") or "").split(":")[0].lower()
+        self.client_tenants[websocket.id] = request_host.split(".")[0] if request_host else None
+
         path = websocket.request.path if websocket.request else ""
 
         # Store client URL args for use with message filters
@@ -314,6 +324,7 @@ class SocketCommunication:
     def _remove_client(self, websocket: ServerConnection):
         self.clients.remove(websocket)
         self.client_url_args.pop(websocket.id, None)
+        self.client_tenants.pop(websocket.id, None)
 
     async def _client_loop(self, websocket: ServerConnection):
         """Client loop - noop.
@@ -332,6 +343,15 @@ class SocketCommunication:
         """
 
         clients = self.clients.copy()
+
+        if self.multi_tenant:
+            # fail closed: untagged messages go nowhere, clients without a resolvable
+            # tenant receive nothing
+            message_tenant = message_data.get("tenant")
+            if not message_tenant:
+                logger.warning("dropping websocket message without tenant tag event=%s", message_data.get("event"))
+                return set()
+            clients = {websocket for websocket in clients if self.client_tenants.get(websocket.id) == message_tenant}
 
         if not message_data.get("filters"):
             return clients

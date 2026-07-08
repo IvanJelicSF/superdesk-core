@@ -5,6 +5,7 @@ from quart import g, session, Request as QuartRequest
 
 from superdesk.core.types import Request as SuperdeskRequest
 from superdesk.core import get_config
+from superdesk.core.tenants import get_current_tenant, is_multi_tenant_enabled
 from superdesk import get_resource_service
 from superdesk.utc import utcnow
 from superdesk.resource_fields import LAST_UPDATED
@@ -22,6 +23,16 @@ async def set_user_request_auth_data(auth_token: str | None, request: SuperdeskR
 
     if not auth_token:
         raise SuperdeskApiError.unauthorizedError()
+
+    # Belt and braces on top of db-per-tenant isolation: a session created on one
+    # tenant host must not be usable on another tenant's host
+    tenant_id: str | None = None
+    if is_multi_tenant_enabled():
+        tenant_id = get_current_tenant().id
+        session_storage = session if isinstance(request, QuartRequest) else request.storage.session
+        stored_tenant_id = session_storage.get("tenant_id")
+        if stored_tenant_id is not None and stored_tenant_id != tenant_id:
+            raise SuperdeskApiError.unauthorizedError()
 
     user_service = get_resource_service("users")
     auth_service = get_resource_service("auth")
@@ -48,6 +59,8 @@ async def set_user_request_auth_data(auth_token: str | None, request: SuperdeskR
         # Superdesk Core request instance not available, use Quart directly
         if session.get("session_token") != auth_token:
             session["session_token"] = auth_token
+        if tenant_id is not None and session.get("tenant_id") != tenant_id:
+            session["tenant_id"] = tenant_id
 
         # Ignore types here, as quart.g is a proxy object and doesn't support type hints
         g.user = user_dict  # type: ignore[attr-defined]
@@ -58,6 +71,8 @@ async def set_user_request_auth_data(auth_token: str | None, request: SuperdeskR
         # Use a Superdesk Core request instance (which indirectly uses Quart)
         if request.storage.session.get("session_token") != auth_token:
             request.storage.session.set("session_token", auth_token)
+        if tenant_id is not None and request.storage.session.get("tenant_id") != tenant_id:
+            request.storage.session.set("tenant_id", tenant_id)
 
         request.storage.request.set("user", user_dict)
         request.storage.request.set("role", user_role)
@@ -92,12 +107,14 @@ def clear_user_request_auth_data(request: SuperdeskRequest | QuartRequest) -> No
 
     if isinstance(request, QuartRequest):
         session.pop("session_token", None)
+        session.pop("tenant_id", None)
         g.pop("user", None)
         g.pop("role", None)
         g.pop("auth", None)
         g.pop("auth_value", None)
     else:
         request.storage.session.pop("session_token", None)
+        request.storage.session.pop("tenant_id", None)
         request.storage.request.pop("user", None)
         request.storage.request.pop("role", None)
         request.storage.request.pop("auth", None)

@@ -1,9 +1,10 @@
-from typing import Any, Callable, Tuple, cast
+from typing import Any, Callable, Optional, Tuple, cast
 
 from inspect import isawaitable
 from functools import update_wrapper
 from asyncio import run
 
+import click
 from click import Context, Group, pass_context, echo
 from quart.cli import ScriptInfo
 
@@ -37,6 +38,50 @@ def with_appcontext_async(fn: Callable) -> Callable:
     return update_wrapper(decorator, fn)
 
 
+def with_tenant_options(fn: Callable) -> Callable:
+    """Adds ``--tenant``/``--all-tenants`` options and runs the command per tenant.
+
+    In single-tenant mode (no options given) the command runs once with the
+    default tenant, exactly as before. In multi-tenant mode the options are
+    required (fail closed). Must run inside an app context (the tenant
+    registry lives on the app).
+    """
+
+    async def wrapper(*args: Any, tenant_ids: tuple = (), all_tenants: bool = False, **kwargs: Any) -> Any:
+        from superdesk.core import get_current_async_app
+        from superdesk.core.tenants import tenant_context, is_multi_tenant_enabled
+
+        async def _invoke() -> Any:
+            response = fn(*args, **kwargs)
+            return await response if isawaitable(response) else response
+
+        if all_tenants:
+            tenants: list = get_current_async_app().tenants.get_all_active_sync()
+        elif tenant_ids:
+            tenants = list(tenant_ids)
+        elif is_multi_tenant_enabled():
+            raise click.UsageError("Multi-tenant mode requires --tenant <id> (repeatable) or --all-tenants")
+        else:
+            return await _invoke()
+
+        results = []
+        for tenant in tenants:
+            with tenant_context(tenant) as bound:
+                echo(f"Running for tenant '{bound.id}'")
+                results.append(await _invoke())
+        return results
+
+    # keep the command's own click params, then append the tenant options
+    wrapper = update_wrapper(wrapper, fn)
+    wrapper = click.option(
+        "--tenant", "tenant_ids", multiple=True, help="Run the command for the given tenant id (repeatable)."
+    )(wrapper)
+    wrapper = click.option(
+        "--all-tenants", "all_tenants", is_flag=True, default=False, help="Run the command once per active tenant."
+    )(wrapper)
+    return wrapper
+
+
 class AsyncAppGroup(AppGroup):
     """
     An extension of Quart's AppGroup to support registration of asynchronous command handlers.
@@ -45,13 +90,29 @@ class AsyncAppGroup(AppGroup):
     that are automatically wrapped with the app context (unless ``with_appcontext=False`` is provided).
     """
 
-    def command(self, name: str | None = None, with_appcontext: bool = True, *args: Any, **kwargs: Any) -> Callable:
+    def command(
+        self,
+        name: str | None = None,
+        with_appcontext: bool = True,
+        tenant_command: Optional[bool] = None,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Callable:
         """This works exactly like the method of the same name on a regular
         :class:`click.Group` but it wraps callbacks in :func:`with_appcontext`
         if it's enabled by passing ``with_appcontext=True``.
+
+        Unless ``tenant_command=False`` is given, the command also gets
+        ``--tenant``/``--all-tenants`` options and runs once per selected
+        tenant (see :func:`with_tenant_options`).
         """
 
+        if tenant_command is None:
+            tenant_command = with_appcontext
+
         def decorator(f: Callable) -> Callable:
+            if tenant_command:
+                f = with_tenant_options(f)
             if with_appcontext:
                 f = with_appcontext_async(f)
             return Group.command(self, name, *args, **kwargs)(f)

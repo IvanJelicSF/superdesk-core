@@ -19,6 +19,8 @@ from quart_babel import gettext as _
 from superdesk.errors import SuperdeskApiError
 from superdesk.core.types import SearchRequest, SortParam, ElasticResourceConfig, ElasticClientConfig, ProjectedFieldArg
 from superdesk.core.resources import get_projection_from_request
+from superdesk.core.tenants.context import get_current_tenant
+from superdesk.core.tenants.naming import tenant_index_prefix
 
 
 class InvalidSearchString(Exception):
@@ -76,6 +78,20 @@ class BaseElasticResourceClient:
         self.resource_name = resource_name
         self.config = config
         self.resource_config = resource_config
+        self.config_prefix = resource_config.prefix or "ELASTICSEARCH"
+
+    @property
+    def index(self) -> str:
+        """Index/alias name resolved from the current tenant at query time.
+
+        ``config.index`` holds the single-tenant name computed at registration;
+        real tenants get ``{tenant_index_prefix}_{source}`` instead.
+        """
+
+        tenant = get_current_tenant()
+        if tenant.is_default:
+            return self.config.index
+        return f"{tenant_index_prefix(tenant, self.config_prefix)}_{self.resource_name}"
 
     def _prepare_for_storage(self, data: Dict[str, Any]) -> Tuple[Dict[str, Any], Optional[Union[str, None]]]:
         doc = data.copy()
@@ -97,7 +113,7 @@ class BaseElasticResourceClient:
         return dict(
             body=doc,
             id=item_id,
-            index=self.config.index,
+            index=self.index,
         )
 
     def _get_bulk_insert_args(self, docs: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -105,7 +121,7 @@ class BaseElasticResourceClient:
             dict(_source=doc, _id=doc_id) for doc, doc_id in self._iter_docs_to_insert(docs)
         ]
         return dict(
-            index=self.config.index,
+            index=self.index,
             actions=actions,
             stats_only=False,
             raise_on_error=False,
@@ -113,9 +129,7 @@ class BaseElasticResourceClient:
 
     def _get_bulk_update_args(self, ids: set[str | ObjectId], updates: dict) -> dict:
         return dict(
-            actions=[
-                dict(_op_type="update", _index=self.config.index, _id=str(item_id), doc=updates) for item_id in ids
-            ],
+            actions=[dict(_op_type="update", _index=self.index, _id=str(item_id), doc=updates) for item_id in ids],
             raise_on_error=False,
             stats_only=False,
         )
@@ -123,7 +137,7 @@ class BaseElasticResourceClient:
     def _get_update_args(self, item_id: str, updates: Dict[str, Any]) -> Dict[str, Any]:
         updates_dict, _id = self._prepare_for_storage(updates)
         return dict(
-            index=self.config.index,
+            index=self.index,
             id=item_id,
             body=dict(doc=updates_dict),
             refresh=True,
@@ -134,7 +148,7 @@ class BaseElasticResourceClient:
         doc, _id = self._prepare_for_storage(document)
 
         return dict(
-            index=self.config.index,
+            index=self.index,
             id=item_id,
             body=doc,
             refresh=True,
@@ -142,13 +156,13 @@ class BaseElasticResourceClient:
 
     def _get_remove_args(self, item_id: str) -> Dict[str, Any]:
         return dict(
-            index=self.config.index,
+            index=self.index,
             id=item_id,
             refresh=True,
         )
 
     def _get_count_args(self, query: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        return dict(index=self.config.index, body=query or {"query": {"match_all": {}}})
+        return dict(index=self.index, body=query or {"query": {"match_all": {}}})
 
     def _get_search_args(
         self,
@@ -157,7 +171,7 @@ class BaseElasticResourceClient:
         projection: ProjectedFieldSources | ProjectedFieldArg | None = None,
     ) -> Dict[str, Any]:
         return dict(
-            index=indexes if indexes is not None else self.config.index,
+            index=indexes if indexes is not None else self.index,
             body=query,
             track_total_hits=self.config.track_total_hits,
             **(self._get_projected_fields_from_param(projection) or {}),
@@ -256,7 +270,7 @@ class BaseElasticResourceClient:
                         query["highlight"].setdefault("require_field_match", False)
 
         return dict(
-            index=self.config.index,
+            index=self.index,
             track_total_hits=self.config.track_total_hits,
             **(self._get_projected_fields_from_request(req) or {}),
             body=query,
@@ -270,7 +284,7 @@ class BaseElasticResourceClient:
         }
 
         return dict(
-            index=self.config.index,
+            index=self.index,
             track_total_hits=self.config.track_total_hits,
             **(self._get_projected_fields_from_request(req) or {}),
             body=query,

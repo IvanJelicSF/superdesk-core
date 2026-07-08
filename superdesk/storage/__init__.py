@@ -16,7 +16,7 @@ import abc
 from eve.io.media import MediaStorage
 from eve.io.mongo.media import GridFSMediaStorage, GridFS
 
-from superdesk.core import get_current_app
+from superdesk.core import get_current_app, get_current_tenant
 from .utils import get_mimetype
 from .mimetype_mixin import MimetypeMixin
 
@@ -80,9 +80,11 @@ class SimpleMediaStorage(GridFSMediaStorage):
         driver = get_current_app().data.mongo
 
         px = driver.current_mongo_prefix(resource)
-        if px not in self._fs:
-            self._fs[px] = GridFS(driver.pymongo(prefix=px).db)
-        return self._fs[px]
+        # the db handle (and so the GridFS bucket) is tenant-scoped
+        fs_key = (get_current_tenant().id, px)
+        if fs_key not in self._fs:
+            self._fs[fs_key] = GridFS(driver.pymongo(prefix=px).db)
+        return self._fs[fs_key]
 
 
 def init_app(app) -> None:
