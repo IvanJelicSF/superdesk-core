@@ -30,6 +30,8 @@ class UsersResource(Resource):
             },
             "password": {"type": "string", "minlength": 5},
             "password_changed_on": {"type": "datetime", "nullable": True},
+            # link to the control-plane account holding shared credentials (multi-tenant)
+            "account_id": {"type": "objectid", "nullable": True},
             "first_name": {"type": "string", "readonly": self.readonly},
             "last_name": {"type": "string", "readonly": self.readonly},
             "display_name": {"type": "string"},

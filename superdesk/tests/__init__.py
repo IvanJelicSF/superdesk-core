@@ -503,11 +503,11 @@ async def cleanup_async_db_connections(current_app):
     if not previous_app:
         return
 
-    for mongo_con in previous_app.async_app.mongo._mongo_clients.values():
-        _close_db_connection(mongo_con[0])
+    for mongo_client in previous_app.async_app.mongo._mongo_clients.values():
+        _close_db_connection(mongo_client)
 
-    for mongo_con in previous_app.async_app.mongo._mongo_clients_async.values():
-        _close_db_connection(mongo_con[0])
+    for mongo_client in previous_app.async_app.mongo._mongo_clients_async.values():
+        _close_db_connection(mongo_client)
 
     for es_con in previous_app.async_app.elastic._elastic_connections.values():
         _close_db_connection(es_con)

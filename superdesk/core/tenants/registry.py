@@ -55,20 +55,28 @@ class TenantRegistry:
     def _cache_ttl(self) -> float:
         return float(self.app.wsgi.config.get("TENANTS_CACHE_TTL", 60))
 
-    @property
-    def collection(self) -> Collection:
+    def get_control_plane_collection(self, name: str) -> Collection:
+        """Sync collection in the control-plane db (tenants, accounts, ...)."""
         if self._client is None:
             uri, dbname = self._connection_config()
             self._client = MongoClient(uri, tz_aware=True)
             self._dbname = dbname
-        return self._client[self._dbname][COLLECTION_NAME]
+        return self._client[self._dbname][name]
 
-    def get_collection_async(self):
+    def get_control_plane_collection_async(self, name: str):
+        """Async collection in the control-plane db (tenants, accounts, ...)."""
         if self._client_async is None:
             uri, dbname = self._connection_config()
             self._client_async = AsyncIOMotorClient(uri, tz_aware=True)
             self._dbname_async = dbname
-        return self._client_async[self._dbname_async][COLLECTION_NAME]
+        return self._client_async[self._dbname_async][name]
+
+    @property
+    def collection(self) -> Collection:
+        return self.get_control_plane_collection(COLLECTION_NAME)
+
+    def get_collection_async(self):
+        return self.get_control_plane_collection_async(COLLECTION_NAME)
 
     def ensure_indexes(self) -> None:
         self.collection.create_index("hosts", unique=True, sparse=True)

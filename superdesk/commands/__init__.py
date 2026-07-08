@@ -13,6 +13,7 @@ from . import schema  # noqa
 from .get_module_schema import get_module_schema  # noqa
 from .async_cli import cli, commands_blueprint  # noqa
 from superdesk.tenants import commands as tenants_commands  # noqa
+from superdesk.accounts import commands as accounts_commands  # noqa
 import superdesk
 
 

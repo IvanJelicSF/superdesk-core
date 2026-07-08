@@ -23,6 +23,7 @@ from superdesk.utils import is_hashed, get_hash, compare_preferences
 from superdesk import get_resource_service
 from superdesk.emails import send_user_status_changed_email, send_activate_account_email, send_user_type_changed_email
 from superdesk.utc import utcnow
+from superdesk.accounts import link_user_credentials
 from superdesk.privilege import get_item_privilege_name, get_privilege_list
 from superdesk.errors import SuperdeskApiError
 from superdesk.users.errors import UserInactiveError, UserNotRegisteredException
@@ -527,6 +528,8 @@ class DBUsersService(UsersService):
         for doc in docs:
             if doc.get("password", None) and not is_hashed(doc.get("password")):
                 doc["password"] = get_hash(doc.get("password"), get_app_config("BCRYPT_GENSALT_WORK_FACTOR", 12))
+            # dual-write credentials to the control-plane account (noop unless SHARED_ACCOUNTS_ENABLED)
+            await link_user_credentials(doc)
 
     async def on_created_async(self, docs):
         """Send email to user with reset password token."""
@@ -578,6 +581,11 @@ class DBUsersService(UsersService):
 
         if self.user_is_waiting_activation(user):
             updates["needs_activation"] = False
+
+        # dual-write credentials to the control-plane account (noop unless SHARED_ACCOUNTS_ENABLED)
+        account_id = await link_user_credentials({**user, **updates})
+        if account_id is not None and user.get("account_id") != account_id:
+            updates["account_id"] = account_id
 
         await self.patch_async(user_id, updates=updates)
 

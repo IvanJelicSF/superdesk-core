@@ -233,6 +233,11 @@ TENANTS_CACHE_TTL = int(env("TENANTS_CACHE_TTL", "60"))
 #: path prefixes served without tenant resolution (health checks etc.)
 TENANT_EXEMPT_PATHS: list = []
 
+#: share credentials across tenants via control-plane accounts: login checks the
+#: account first (falling back to tenant-local credentials), password changes are
+#: dual-written to the account; user profiles/preferences stay per tenant
+SHARED_ACCOUNTS_ENABLED = strtobool(env("SHARED_ACCOUNTS_ENABLED", "false"))
+
 #: elastic url
 ELASTICSEARCH_URL = env("ELASTICSEARCH_URL", "http://localhost:9200")
 CONTENTAPI_ELASTICSEARCH_URL = env("CONTENTAPI_ELASTICSEARCH_URL", ELASTICSEARCH_URL)

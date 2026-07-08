@@ -19,8 +19,8 @@ every code path, so single-tenant deployments behave exactly as before with zero
 | 6 | CLI tenant options + provisioning | ✅ done |
 | 7 | Websocket/notification tenant scoping | ✅ done |
 | 8 | Hardening (cache keys, locks, S3 subfolder, audit) | ✅ done |
-| 9 | Accounts phase 1 (shared credentials, additive) | ⏳ in progress |
-| 10 | Cross-tenant content exchange | ⬜ pending |
+| 9 | Accounts phase 1 (shared credentials, additive) | ✅ done |
+| 10 | Cross-tenant content exchange | ⏳ in progress |
 | 11 | Accounts phase 2 + tenant admin API | ⬜ pending |
 
 ## New settings
@@ -31,6 +31,7 @@ every code path, so single-tenant deployments behave exactly as before with zero
 | `TENANTS_MONGO_URI` / `TENANTS_MONGO_DBNAME` | `mongodb://localhost/superdesk_tenants` | Control-plane db holding the `tenants` registry (never a tenant db) |
 | `TENANTS_CACHE_TTL` | `60` | Seconds registry lookups are cached in process |
 | `TENANT_EXEMPT_PATHS` | `[]` | Path prefixes served without tenant resolution (health checks) |
+| `SHARED_ACCOUNTS_ENABLED` | `false` | Shared credentials across tenants via control-plane accounts (M9) |
 
 Operational requirement: with mongo auth and per-tenant databases, the mongo URI **must** carry an
 explicit `authSource` (e.g. `authSource=admin`) — the legacy default of `authSource=<dbname>` does
@@ -183,6 +184,35 @@ not work when the db name varies per tenant.
 - **S3** (`superdesk/storage/amazon_media_storage.py`): new `get_subfolder()` composes the
   configured `AMAZON_S3_SUBFOLDER` with the tenant's `s3_subfolder` (default: tenant id) —
   `{base}/{tenant}/{key}` in the shared bucket; used by `get_key` and both `list_objects` paths.
+
+## M9 — Shared credentials, per-tenant users (`superdesk/accounts/`)
+
+Strictly additive, gated by `SHARED_ACCOUNTS_ENABLED` (default off). An **account** holds the
+credentials (email unique across all tenants, optional unique username, bcrypt hash) in the
+control-plane db; each tenant keeps its own `users` doc (profile, role, privileges, preferences)
+linked via a new optional `account_id` field.
+
+- `superdesk/accounts/service.py` — accounts store on the control-plane db (via new
+  `TenantRegistry.get_control_plane_collection[_async]` accessors): `find_account` (by username or
+  lowercased email), `verify_account_password`, `account_password_expired`,
+  `upsert_account_credentials` (username unique-index conflict → account linked by email only),
+  and the dual-write hook `link_user_credentials(user_doc)`.
+- **Login** (`apps/auth/db/db.py::DbAuthService.authenticate`): when enabled, account-first —
+  credentials are checked against the account (enabled flag, bcrypt, expiry/needs-reset), then the
+  tenant-local user is resolved by `account_id` with a one-time email fallback that lazily links
+  (self-healing). No tenant-local user → auth error (an account alone grants nothing on a tenant).
+  No account for the username → the existing per-tenant `auth_users` path runs unchanged.
+- **Dual-write**: `DBUsersService.on_create_async` (user created with password) and
+  `DBUsersService.update_password` (used by both change-password and reset-password flows) upsert
+  the account credentials and set `account_id`. Sessions stay per-tenant; preferences untouched.
+- **CLI**: `accounts:create`, `accounts:set-password` (control-plane, `tenant_command=False`) and
+  `accounts:migrate` (a tenant command — combine with `--tenant`/`--all-tenants`): for each tenant
+  user with a hashed password, create/link the account; on cross-tenant password conflicts the
+  newest `password_changed_on` wins and the account is flagged `needs_password_reset`; SSO
+  (`user_type=external`) and non-hashed passwords are skipped. Idempotent.
+- Tests: `tests/core/tenants_accounts_test.py` (account CRUD against real control-plane mongo,
+  username conflicts, dual-write hook, expiry; account-first authentication incl. fail-closed
+  no-local-user, lazy linking, needs-reset).
 
 ## Tests
 

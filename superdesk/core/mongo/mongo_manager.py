@@ -32,9 +32,10 @@ class MongoResources:
     #: clients are cached per config prefix (one per cluster URI, shared by all tenants)
     _mongo_clients: Dict[str, MongoClient]
     _mongo_clients_async: Dict[str, AsyncIOMotorClient]
-    #: database handles are cached per (tenant_id, prefix, versioning)
-    _mongo_dbs: Dict[Tuple[str, str, bool], Database]
-    _mongo_dbs_async: Dict[Tuple[str, str, bool], AsyncIOMotorDatabase]
+    #: database handles are cached per (tenant_id, prefix); versioned resources use the
+    #: same database with a ``_versions`` collection suffix (see ``get_collection_name``)
+    _mongo_dbs: Dict[Tuple[str, str], Database]
+    _mongo_dbs_async: Dict[Tuple[str, str], AsyncIOMotorDatabase]
 
     #: A reference back to the parent app, for configuration purposes
     app: "SuperdeskAsyncApp"
@@ -135,11 +136,11 @@ class MongoResources:
             client = MongoClient(**client_config)
             self._mongo_clients[prefix] = client
 
-        db_key = (tenant.id, prefix, versioning)
+        db_key = (tenant.id, prefix)
         db = self._mongo_dbs.get(db_key)
         if db is None:
             _client_config, dbname = get_mongo_client_config(self.app.wsgi.config, prefix, tenant)
-            db = client.get_database(dbname if not versioning else f"{dbname}_versions")
+            db = client.get_database(dbname)
             self._mongo_dbs[db_key] = db
 
         return client, db
@@ -270,11 +271,11 @@ class MongoResources:
             client = AsyncIOMotorClient(**client_config)
             self._mongo_clients_async[prefix] = client
 
-        db_key = (tenant.id, prefix, versioning)
+        db_key = (tenant.id, prefix)
         db = self._mongo_dbs_async.get(db_key)
         if db is None:
             _client_config, dbname = get_mongo_client_config(self.app.wsgi.config, prefix, tenant)
-            db = client.get_database(dbname if not versioning else f"{dbname}_versions")
+            db = client.get_database(dbname)
             self._mongo_dbs_async[db_key] = db
 
         return client, db

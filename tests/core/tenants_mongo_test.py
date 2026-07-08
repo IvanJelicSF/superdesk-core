@@ -66,12 +66,14 @@ class MongoResourcesTenantTestCase(TestCase):
         self.assertEqual(db_a.name, "sd_tenant_a")
         self.assertEqual(db_b.name, "sd_tenant_b")
 
-    def test_versioned_db_is_tenant_scoped(self):
+    def test_versioned_access_uses_same_tenant_db(self):
         with tenant_context(TENANT_A):
             _client, db = self.app.mongo.get_client("items", versioning=True)
-            self.assertEqual(db.name, "sd_tenant_a_versions")
+            self.assertEqual(db.name, "sd_tenant_a")
+            collection = self.app.mongo.get_collection("items", versioning=True)
+            self.assertEqual(collection.name, "items_versions")
         _client, db = self.app.mongo.get_client("items", versioning=True)
-        self.assertEqual(db.name, "superdesk_versions")
+        self.assertEqual(db.name, "superdesk")
 
     def test_async_db_handles_are_tenant_scoped(self):
         with tenant_context(TENANT_A):
