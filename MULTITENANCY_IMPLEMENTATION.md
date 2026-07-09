@@ -21,7 +21,7 @@ every code path, so single-tenant deployments behave exactly as before with zero
 | 8 | Hardening (cache keys, locks, S3 subfolder, audit) | ✅ done |
 | 9 | Accounts phase 1 (shared credentials, additive) | ✅ done |
 | 10 | Cross-tenant content exchange | ✅ done |
-| 11 | Accounts phase 2 + tenant admin API | ⏳ partial (see M11) |
+| 11 | Accounts phase 2 + tenant admin API | ✅ done |
 
 ## New settings
 
@@ -32,6 +32,9 @@ every code path, so single-tenant deployments behave exactly as before with zero
 | `TENANTS_CACHE_TTL` | `60` | Seconds registry lookups are cached in process |
 | `TENANT_EXEMPT_PATHS` | `[]` | Path prefixes served without tenant resolution (health checks) |
 | `SHARED_ACCOUNTS_ENABLED` | `false` | Shared credentials across tenants via control-plane accounts (M9) |
+| `SHARED_ACCOUNTS_AUTHORITATIVE` | `false` | Phase 2: passwords only on the account, no tenant-local fallback (M11) |
+| `TENANT_ADMIN_HOST` | `""` | Reserved non-tenant host serving the tenant admin api (M11) |
+| `TENANT_ADMIN_API_TOKEN` | `""` | Bearer token guarding the tenant admin api; empty = api disabled (M11) |
 
 Operational requirement: with mongo auth and per-tenant databases, the mongo URI **must** carry an
 explicit `authSource` (e.g. `authSource=admin`) — the legacy default of `authSource=<dbname>` does
@@ -252,26 +255,36 @@ same subscriber just switches to the `http_push` transmitter.
 - Follow-up (moved to M11 scope): manual "send to tenant" endpoint + `send_to_tenant` privilege
   for unpublished content; behave round-trip e2e.
 
-## M11 — Accounts phase 2 (partial)
+## M11 — Accounts phase 2 + tenant admin API
 
-Done:
-
-- `SHARED_ACCOUNTS_AUTHORITATIVE` (default off): passwords live **only** on the control-plane
-  account — the dual-write hook strips the hash from tenant user docs, and login has no
-  tenant-local fallback (unknown account → auth error).
-- Account → tenants mapping (`account_tenants` control-plane collection), maintained by the
-  dual-write hook; `accounts:tenants --email ...` CLI lists the tenants where an account has a
-  user. This is the data layer for a future client-side tenant switcher.
-
-Remaining (not implemented yet):
-
-- HTTP tenant admin API on a reserved non-tenant host (`TENANT_ADMIN_HOST`), super-admin gated.
-- `GET /accounts/me/tenants` tenant-switcher endpoint for the client.
-- Control-plane reset-password tokens (today reset tokens stay per tenant; with shared accounts a
-  reset done on one tenant propagates via the dual-write on `update_password`).
-- Manual "send to tenant" endpoint + `send_to_tenant` privilege for unpublished content
-  (automatic subscriber-based exchange from M10 works without it).
-- Behave e2e suites for provisioning and the exchange round-trip.
+- **Authoritative accounts mode** (`SHARED_ACCOUNTS_AUTHORITATIVE`, default off): passwords live
+  **only** on the control-plane account — the dual-write hook strips the hash from tenant user
+  docs, and login has no tenant-local fallback (unknown account → auth error).
+- **Account → tenants mapping** (`account_tenants` control-plane collection), maintained by the
+  dual-write hook; `accounts:tenants --email ...` CLI.
+- **Tenant switcher endpoint** (`superdesk/accounts/api.py`): `GET /accounts/me/tenants`
+  (session-authenticated) returns the active tenants + hosts where the current user's account has
+  a linked user; the client redirects to the chosen host and the user logs in there (sessions
+  never span tenants).
+- **HTTP tenant admin API** (`superdesk/tenants/admin_api.py`), in `CORE_APPS`:
+  `GET|POST /tenant-admin/tenants`, `GET|PATCH|DELETE /tenant-admin/tenants/<slug>[?purge=1]`
+  (create provisions via the same resumable flow as the CLI; PATCH updates status and the partner
+  allowlist; DELETE requires the tenant to be disabled). Fail-closed guard: requires
+  `MULTI_TENANT_ENABLED`, a non-empty `TENANT_ADMIN_API_TOKEN` bearer token and the request host to
+  equal `TENANT_ADMIN_HOST` — otherwise every endpoint answers 404 (the api does not advertise
+  itself). The tenant middleware serves the admin host without binding a tenant, so any
+  tenant-scoped access on it fails closed.
+- **Manual "send to tenant"** (`superdesk/tenants/exchange/api.py`, in `CORE_APPS`):
+  `POST /archive/send_to_tenant {item_id, target_tenant, desk?, stage?, auto_fetch?}`, guarded by
+  the new `send_to_tenant` privilege; snapshots the archive item with the ninjs formatter and runs
+  the same transmit path as the subscriber-based exchange (partner allowlists still apply).
+- Reset-password decision: tokens stay per tenant — with shared accounts a password reset done on
+  any tenant propagates to the account via the dual-write on `update_password`, and reset links
+  land on the host they were requested from. Control-plane tokens are not needed.
+- Not included: behave e2e suites for provisioning and the exchange round-trip (follow-up).
+- New settings: `TENANT_ADMIN_HOST`, `TENANT_ADMIN_API_TOKEN`, `SHARED_ACCOUNTS_AUTHORITATIVE`.
+- Tests: `tests/core/tenants_admin_api_test.py` (guard fail-closed matrix, list/create/patch/delete
+  flows) plus the mapping/authoritative additions in `tests/core/tenants_accounts_test.py`.
 
 ## Tests
 

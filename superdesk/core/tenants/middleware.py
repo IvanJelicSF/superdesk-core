@@ -46,6 +46,13 @@ def setup_tenant_middleware(app) -> None:
                 return None
 
         host = (request.host or "").split(":")[0].lower()
+
+        admin_host = (app.config.get("TENANT_ADMIN_HOST") or "").split(":")[0].lower()
+        if admin_host and host == admin_host:
+            # control-plane requests are served without a tenant; anything
+            # tenant-scoped on this host fails closed via TenantNotSetError
+            return None
+
         tenant = await app.async_app.tenants.get_by_host(host)
 
         if tenant is None or tenant.status == TenantStatus.DELETED:

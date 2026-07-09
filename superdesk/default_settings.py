@@ -242,6 +242,13 @@ SHARED_ACCOUNTS_ENABLED = strtobool(env("SHARED_ACCOUNTS_ENABLED", "false"))
 #: tenant user docs no longer store hashes and there is no tenant-local login fallback
 SHARED_ACCOUNTS_AUTHORITATIVE = strtobool(env("SHARED_ACCOUNTS_AUTHORITATIVE", "false"))
 
+#: reserved non-tenant host serving the tenant admin api (e.g. admin.example.com);
+#: the api stays disabled unless this and TENANT_ADMIN_API_TOKEN are both set
+TENANT_ADMIN_HOST = env("TENANT_ADMIN_HOST", "")
+
+#: static bearer token guarding the tenant admin api
+TENANT_ADMIN_API_TOKEN = env("TENANT_ADMIN_API_TOKEN", "")
+
 #: elastic url
 ELASTICSEARCH_URL = env("ELASTICSEARCH_URL", "http://localhost:9200")
 CONTENTAPI_ELASTICSEARCH_URL = env("CONTENTAPI_ELASTICSEARCH_URL", ELASTICSEARCH_URL)
@@ -517,6 +524,9 @@ CORE_APPS = [
     "superdesk.system.health",
     "apps.languages",
     "superdesk.publish_async",
+    "superdesk.tenants.admin_api",
+    "superdesk.tenants.exchange.api",
+    "superdesk.accounts.api",
 ]
 
 #: Specify what modules should be enabled
