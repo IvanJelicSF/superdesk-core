@@ -150,5 +150,7 @@ class TransmitterValidationTestCase(IsolatedAsyncioTestCase):
         self.assertEqual(call.kwargs["headers"], {"tenant_id": "tenant-b"})
         delivered = call.kwargs["kwargs"]
         self.assertEqual(delivered["source_tenant"], "tenant-a")
-        self.assertEqual(delivered["item"]["extra"]["original_tenant"], "tenant-a")
-        self.assertEqual(delivered["item"]["extra"]["original_item_id"], "item-1")
+        # the item travels as a json string (celery serializer would coerce datetimes)
+        item = json.loads(delivered["item"])
+        self.assertEqual(item["extra"]["original_tenant"], "tenant-a")
+        self.assertEqual(item["extra"]["original_item_id"], "item-1")

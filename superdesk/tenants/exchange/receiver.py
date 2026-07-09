@@ -8,13 +8,13 @@
 # AUTHORS and LICENSE files distributed with this source code, or
 # at https://www.sourcefabric.org/superdesk/license
 
+import json
 import logging
 
 from superdesk import get_resource_service
 from superdesk.celery_app import celery
 from superdesk.core.tenants import get_current_tenant
 from superdesk.errors import ProviderError
-from superdesk.io.registry import registered_feeding_services
 from superdesk.io.feed_parsers.ninjs import NINJSFeedParser
 from superdesk.io.commands.update_ingest import ingest_items
 from superdesk.utc import utcnow
@@ -39,6 +39,8 @@ async def get_exchange_provider(source_tenant: str) -> dict:
         "source": source_tenant,
         "feeding_service": TenantExchangeFeedingService.NAME,
         "feed_parser": "ninjs",
+        # ingest filters out any item whose type is not in content_types
+        "content_types": ["text", "picture", "composite", "video", "audio", "graphic"],
         "content_expiry": None,
         "is_closed": False,
         "last_updated": utcnow(),
@@ -49,17 +51,21 @@ async def get_exchange_provider(source_tenant: str) -> dict:
 
 
 @celery.task(name="tenants.deliver_to_tenant", bind=True)
-def deliver_to_tenant(self, item: dict, source_tenant: str, auto_fetch=False, desk=None, stage=None):
+def deliver_to_tenant(self, item: dict | str, source_tenant: str, auto_fetch=False, desk=None, stage=None):
     """Ingest an exchanged (ninjs) item in the target tenant's context.
 
     The tenant is restored from the task headers by the standard prologue;
-    this body already runs in the target tenant.
+    this body already runs in the target tenant. ``item`` arrives as a json
+    string to survive the context-aware celery serializer untouched.
     """
 
     return _deliver(item, source_tenant, auto_fetch=auto_fetch, desk=desk, stage=stage)
 
 
-async def _deliver(item: dict, source_tenant: str, auto_fetch=False, desk=None, stage=None):
+async def _deliver(item: dict | str, source_tenant: str, auto_fetch=False, desk=None, stage=None):
+    if isinstance(item, str):
+        item = json.loads(item)
+
     target = get_current_tenant()
     if target.is_default or not target.can_receive_from(source_tenant):
         raise ProviderError.ingestError(
@@ -67,7 +73,7 @@ async def _deliver(item: dict, source_tenant: str, auto_fetch=False, desk=None, 
         )
 
     provider = await get_exchange_provider(source_tenant)
-    feeding_service = registered_feeding_services[TenantExchangeFeedingService.NAME].__class__()
+    feeding_service = TenantExchangeFeedingService()
 
     parser = NINJSFeedParser()
     parsed = parser._transform_from_ninjs(item)

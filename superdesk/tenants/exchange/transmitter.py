@@ -84,7 +84,10 @@ class InternalTenantTransmitter(PublishService):
 
         await deliver_to_tenant.apply_async(
             kwargs=dict(
-                item=item,
+                # as a json string so the context-aware celery serializer does not
+                # coerce iso datetime strings into datetime objects (the ninjs
+                # parser on the receiving side expects plain ninjs json)
+                item=json.dumps(item),
                 source_tenant=source.id,
                 auto_fetch=bool(config.get("auto_fetch")),
                 desk=config.get("desk"),

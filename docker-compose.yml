@@ -79,6 +79,7 @@ services:
 
     server:
         build: .
+        image: superdesk-core-server
         profiles: ["server"]
         ports:
             - "5000:5000"
@@ -93,7 +94,7 @@ services:
             - superdesk-core
 
     ws:
-        build: .
+        image: superdesk-core-server
         profiles: ["server"]
         command: python -m superdesk.ws
         ports:
@@ -108,7 +109,7 @@ services:
             - superdesk-core
 
     worker:
-        build: .
+        image: superdesk-core-server
         profiles: ["server"]
         command: celery -A docker.worker:celery worker --loglevel=info
         environment: *superdesk-environment
@@ -120,7 +121,7 @@ services:
             - superdesk-core
 
     beat:
-        build: .
+        image: superdesk-core-server
         profiles: ["server"]
         command: celery -A docker.worker:celery beat --loglevel=info --schedule=/tmp/celerybeatschedule.db
         environment: *superdesk-environment
