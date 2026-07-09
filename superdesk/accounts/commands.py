@@ -90,16 +90,21 @@ async def accounts_migrate():
                         }
                     },
                 )
-            else:
-                accounts_collection.update_one(
-                    {"email": email}, {"$set": {"needs_password_reset": True, "_updated": utcnow()}}
-                )
-            conflicts += 1
+                conflicts += 1
+            # else: the account already holds a newer password (e.g. set via
+            # accounts:set-password) - it stays authoritative, nothing to flag
 
+        account = accounts_collection.find_one({"email": email})
         if not user.get("account_id"):
-            account = accounts_collection.find_one({"email": email})
             users.update_one({"_id": user["_id"]}, {"$set": {"account_id": account["_id"]}})
             linked += 1
+
+        # maintain the account -> tenants mapping (tenant switcher)
+        from superdesk.core.tenants import try_get_current_tenant
+
+        tenant = try_get_current_tenant()
+        if tenant is not None and not tenant.is_default:
+            service.record_account_tenant(account["_id"], tenant.id)
 
     echo(f"accounts migrated={migrated} linked={linked} conflicts={conflicts} skipped={skipped}")
 

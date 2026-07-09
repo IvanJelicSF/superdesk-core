@@ -26,6 +26,8 @@ class UsersResourceModel(ResourceModelWithObjectId):
     username: Annotated[fields.Keyword, validate_unique_value_async("users", "username")]
     password: Annotated[str | None, Field(min_length=5)] = None
     password_changed_on: datetime | None = None
+    # link to the control-plane account holding shared credentials (multi-tenant)
+    account_id: ObjectId | None = None
     first_name: str | None = None
     last_name: str | None = None
     display_name: str | None = None

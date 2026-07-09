@@ -38,16 +38,26 @@ PYEOF
 
 export QUART_APP=docker.app:application
 
-echo "initializing data (idempotent)..."
-quart app:initialize_data
+multi_tenant=$(echo "${MULTI_TENANT_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')
+if [ "$multi_tenant" = "true" ] || [ "$multi_tenant" = "1" ] || [ "$multi_tenant" = "yes" ] || [ "$multi_tenant" = "on" ]; then
+    # multi-tenant mode: no global db to initialize - each tenant is provisioned
+    # (indexes, mappings, seed data, admin user) by tenants:create, e.g.:
+    #   docker compose exec server quart tenants:create tenant-a \
+    #     --host tenant-a.localhost --admin-username admin --admin-password admin \
+    #     --admin-email admin@example.com
+    echo "multi-tenant mode: skipping global data init; create tenants with 'quart tenants:create'"
+else
+    echo "initializing data (idempotent)..."
+    quart app:initialize_data
 
-if [ -n "${SUPERDESK_ADMIN_USERNAME:-}" ]; then
-    echo "ensuring admin user '${SUPERDESK_ADMIN_USERNAME}' exists (noop if present)..."
-    quart users:create \
-        -u "${SUPERDESK_ADMIN_USERNAME}" \
-        -p "${SUPERDESK_ADMIN_PASSWORD:-admin}" \
-        -e "${SUPERDESK_ADMIN_EMAIL:-admin@example.com}" \
-        --admin || echo "users:create failed (continuing)"
+    if [ -n "${SUPERDESK_ADMIN_USERNAME:-}" ]; then
+        echo "ensuring admin user '${SUPERDESK_ADMIN_USERNAME}' exists (noop if present)..."
+        quart users:create \
+            -u "${SUPERDESK_ADMIN_USERNAME}" \
+            -p "${SUPERDESK_ADMIN_PASSWORD:-admin}" \
+            -e "${SUPERDESK_ADMIN_EMAIL:-admin@example.com}" \
+            --admin || echo "users:create failed (continuing)"
+    fi
 fi
 
 echo "starting api server on :5000"

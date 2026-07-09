@@ -137,13 +137,16 @@ async def upsert_account_credentials(
             "email": email,
             "is_enabled": True,
             "is_super_admin": False,
-            "needs_password_reset": False,
             "_created": now,
         },
     }
     if password_hash:
         update["$set"]["password"] = password_hash
         update["$set"]["password_changed_on"] = password_changed_on or now
+        # a fresh password satisfies any pending reset requirement
+        update["$set"]["needs_password_reset"] = False
+    else:
+        update["$setOnInsert"]["needs_password_reset"] = False
     if username:
         update["$setOnInsert"]["username"] = username
 

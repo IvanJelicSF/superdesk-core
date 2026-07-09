@@ -30,11 +30,11 @@ x-superdesk-environment: &superdesk-environment
     SUPERDESK_ADMIN_PASSWORD: admin
     SUPERDESK_ADMIN_EMAIL: admin@example.com
     # --- multi-tenancy (see MULTITENANCY_IMPLEMENTATION.md) ---
-    MULTI_TENANT_ENABLED: "false"
-    SHARED_ACCOUNTS_ENABLED: "false"
-    # TENANT_ADMIN_HOST: admin.localhost
-    # TENANT_ADMIN_API_TOKEN: dev-admin-token
-    # TENANT_WEBHOOK_URL: https://hooks.example.com/tenants
+    MULTI_TENANT_ENABLED: "true"
+    SHARED_ACCOUNTS_ENABLED: "true"
+    TENANT_ADMIN_HOST: admin.localhost
+    TENANT_ADMIN_API_TOKEN: dev-admin-token
+    #TENANT_WEBHOOK_URL: https://hooks.example.com/tenants
 
 services:
     elastic:

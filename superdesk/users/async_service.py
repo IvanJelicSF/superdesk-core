@@ -25,6 +25,7 @@ from superdesk.utils import is_hashed, get_hash, compare_preferences
 from superdesk import get_resource_service
 from superdesk.emails import send_user_status_changed_email, send_activate_account_email, send_user_type_changed_email
 from superdesk.utc import utcnow
+from superdesk.accounts import link_user_credentials
 from superdesk.privilege import get_item_privilege_name, get_privilege_list
 from superdesk.errors import SuperdeskApiError
 from superdesk.users.errors import UserInactiveError, UserNotRegisteredException
@@ -423,6 +424,19 @@ class DBUsersAsyncService(UsersAsyncService):
         for doc in docs:
             if doc.password and not is_hashed(doc.password):
                 doc.password = get_hash(doc.password, get_app_config("BCRYPT_GENSALT_WORK_FACTOR", 12))
+            # dual-write credentials to the control-plane account (noop unless SHARED_ACCOUNTS_ENABLED)
+            credentials = {
+                "email": doc.email,
+                "username": doc.username,
+                "password": doc.password,
+                "password_changed_on": doc.password_changed_on,
+            }
+            account_id = await link_user_credentials(credentials)
+            if account_id is not None:
+                doc.account_id = account_id
+                if "password" not in credentials:
+                    # authoritative mode: the account is the only credential store
+                    doc.password = None
 
     async def on_created(self, docs: list[UsersResourceModel]) -> None:
         """Send email to user with reset password token."""
@@ -479,6 +493,15 @@ class DBUsersAsyncService(UsersAsyncService):
 
         if self.user_is_waiting_activation(user):
             updates["needs_activation"] = False
+
+        # dual-write credentials to the control-plane account (noop unless SHARED_ACCOUNTS_ENABLED)
+        merged = {**user.to_dict(), **updates}
+        account_id = await link_user_credentials(merged)
+        if account_id is not None and user.account_id != account_id:
+            updates["account_id"] = account_id
+        if account_id is not None and "password" not in merged:
+            # authoritative mode: the account is the only credential store
+            updates.pop("password", None)
 
         await self.update(user_id, updates=updates)
 
