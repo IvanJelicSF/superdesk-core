@@ -20,8 +20,8 @@ from .errors import TenantNotSetError, TenantNotFoundError
 current_tenant: ContextVar[Tenant | None] = ContextVar("current_tenant", default=None)
 
 #: config keys a tenant record may override via ``config_overrides``;
-#: empty by default — infra keys (MONGO_URI, MODULES, SECRET_KEY, ...) must never be tenant-supplied
-TENANT_OVERRIDABLE_CONFIG_KEYS: set[str] = set()
+#: infra keys (MONGO_URI, MODULES, SECRET_KEY, ...) must never be tenant-supplied
+TENANT_OVERRIDABLE_CONFIG_KEYS: set[str] = {"MEDIA_PREFIX"}
 
 #: sentinel returned by :func:`get_tenant_config_override` when there is no override
 NO_OVERRIDE = object()

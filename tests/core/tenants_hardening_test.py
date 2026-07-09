@@ -1,4 +1,4 @@
-from unittest import TestCase, mock
+from unittest import TestCase, IsolatedAsyncioTestCase, mock
 
 from superdesk.cache import SuperdeskCacheBackend, SuperdeskMangler
 from superdesk.core.app import SuperdeskAsyncApp
@@ -84,3 +84,48 @@ class AmazonSubfolderTestCase(TestCase):
         self.assertEqual(self.storage.get_key("media/1.jpg"), "media/1.jpg")
         with tenant_context(TENANT_A):
             self.assertEqual(self.storage.get_key("media/1.jpg"), "tenant-a/media/1.jpg")
+
+
+class MediaPrefixTestCase(IsolatedAsyncioTestCase):
+    """Tenant-aware media url prefix (upload_url / rendition hrefs)."""
+
+    def setUp(self):
+        self.app = SuperdeskAsyncApp(
+            MockWSGI(config={"MULTI_TENANT_ENABLED": True, "MEDIA_PREFIX": "http://localhost:5000/api/upload-raw"})
+        )
+
+    def tearDown(self):
+        self.app.stop()
+
+    def test_single_tenant_keeps_configured_prefix(self):
+        from superdesk.upload import get_media_prefix
+
+        self.app.wsgi.config["MULTI_TENANT_ENABLED"] = False
+        self.assertEqual(get_media_prefix(), "http://localhost:5000/api/upload-raw")
+
+    def test_tenant_host_fallback_outside_request(self):
+        from superdesk.upload import get_media_prefix
+
+        with tenant_context(TENANT_A):
+            self.assertEqual(get_media_prefix(), "http://tenant-a.example.com/api/upload-raw")
+
+    async def test_request_origin_wins(self):
+        from quart import Quart
+        from superdesk.upload import get_media_prefix
+
+        app = Quart(__name__)
+        async with app.test_request_context("/api/archive", headers={"Host": "tenant-a.localhost:5000"}):
+            with tenant_context(TENANT_A):
+                self.assertEqual(get_media_prefix(), "http://tenant-a.localhost:5000/api/upload-raw")
+
+    def test_explicit_tenant_override_wins(self):
+        from superdesk.upload import get_media_prefix
+        from superdesk.core.tenants import Tenant
+
+        tenant = Tenant(
+            id="tenant-a",
+            hosts=("tenant-a.example.com",),
+            config_overrides={"MEDIA_PREFIX": "https://cdn.tenant-a.example.com/media"},
+        )
+        with tenant_context(tenant):
+            self.assertEqual(get_media_prefix(), "https://cdn.tenant-a.example.com/media")

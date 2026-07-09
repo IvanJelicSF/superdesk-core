@@ -134,9 +134,44 @@ def url_for_media(media_id, mimetype=None):
     return get_current_app().media.url_for_media(media_id, mimetype)
 
 
+def get_media_prefix() -> str:
+    """The media url prefix, tenant-aware in multi-tenant mode.
+
+    ``MEDIA_PREFIX`` is a single static url (derived from ``SERVER_URL``) which
+    would point every tenant's media at the same host. In multi-tenant mode the
+    authority is replaced with the current request's origin (matching however
+    the client reached us, scheme and port included), falling back to the
+    tenant's first host outside a request context (celery formatting etc.).
+    A per-tenant ``MEDIA_PREFIX`` in ``Tenant.config_overrides`` wins over both.
+    """
+
+    from urllib.parse import urlparse
+    from superdesk.core.tenants import is_multi_tenant_enabled, try_get_current_tenant
+
+    media_prefix = (get_app_config("MEDIA_PREFIX") or "").rstrip("/")
+    if not is_multi_tenant_enabled():
+        return media_prefix
+
+    tenant = try_get_current_tenant()
+    if tenant is not None and "MEDIA_PREFIX" in tenant.config_overrides:
+        # explicit per-tenant prefix already served by the config overlay
+        return media_prefix
+
+    parsed = urlparse(media_prefix)
+    try:
+        if request:
+            return f"{request.host_url.rstrip('/')}{parsed.path}"
+    except RuntimeError:
+        pass
+
+    if tenant is not None and not tenant.is_default and tenant.hosts:
+        return f"{parsed.scheme}://{tenant.hosts[0]}{parsed.path}"
+
+    return media_prefix
+
+
 def upload_url(media_id, view="upload_raw.get_upload_as_data_uri"):
-    media_prefix = get_app_config("MEDIA_PREFIX").rstrip("/")
-    return "%s/%s" % (media_prefix, media_id)
+    return "%s/%s" % (get_media_prefix(), media_id)
 
 
 def init_app(app) -> None:
