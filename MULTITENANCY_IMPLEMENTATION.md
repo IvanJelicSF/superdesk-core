@@ -308,13 +308,13 @@ same subscriber just switches to the `http_push` transmitter.
   tombstone record is kept (audit + host reservation).
 - **Lifecycle webhooks** (`superdesk/tenants/webhooks.py` + `tenants.webhook_notify` task):
   `tenant.suspended`, `tenant.activated`, `tenant.deleted` and `tenant.purged` events POST
-  `{event, tenant, status, hosts, timestamp, deleted_at?, purged_at?}` to the configured
-  endpoint — delivered via Celery with exponential-backoff retries and HMAC-SHA256-signed
-  (`X-Superdesk-Signature`) when a secret is set. The endpoint is **configurable from the
-  tenant admin panel** (`GET/PUT /tenant-admin/webhook`, secret write-only, plus
-  `POST /tenant-admin/webhook/test` for a synchronous `tenant.test` delivery); it is stored
-  in the control-plane `settings` collection, with `TENANT_WEBHOOK_URL`/`TENANT_WEBHOOK_SECRET`
-  as config-file fallback.
+  `{event, tenant, status, hosts, timestamp, deleted_at?, purged_at?}` — delivered via Celery
+  with exponential-backoff retries and HMAC-SHA256-signed (`X-Superdesk-Signature`) per-webhook
+  secrets. **Multiple webhooks** are stored in the control-plane `webhooks` collection; every
+  enabled webhook receives all tenant lifecycle events, with one queued delivery per webhook
+  and url/secret re-read at delivery time. Managed from the panel via `/tenant-admin/webhooks` CRUD +
+  `POST /tenant-admin/webhooks/{id}/test`; `TENANT_WEBHOOK_URL`/`TENANT_WEBHOOK_SECRET` act as
+  one implicit read-only all-tenants webhook (id `config`).
 - **Client integration**: `client_config` exposes `multi_tenant_enabled`,
   `shared_accounts_enabled` and `tenant_admin_url`; `GET /accounts/me/tenants` includes
   `is_super_admin` to gate the client's "Tenant administration" menu entry. Client-side spec:
@@ -363,10 +363,11 @@ same subscriber just switches to the `http_push` transmitter.
 
 ## Known v1 limitations / follow-ups
 
-- Worker log noise: the prefork consumer logs a recurring
-  `unsupported operand type(s) for -: 'datetime.datetime' and 'int'` at ERROR (MainProcess)
-  in the docker stack; it does not block task consumption (tasks and beat fan-out execute)
-  but needs a root-cause pass (appears tied to the hub/gossip/heartbeat timers).
+- (resolved) The recurring `datetime - int` worker errors were celery's gossip consumer
+  choking on its own event messages: the superdesk context-aware celery serializer was
+  registered under the standard `application/json` content type, hijacking the decoder for
+  celery's internal messages and datetime-coercing their fields. It now registers as
+  `application/x-context-aware-json` (added to `CELERY_ACCEPT_CONTENT`).
 
 - Config overrides only apply to runtime `get_app_config()` reads; boot-time config is global.
 - The websocket server matches tenants by subdomain label only (no registry lookup in that process).

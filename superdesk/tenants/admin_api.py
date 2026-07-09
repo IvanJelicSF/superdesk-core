@@ -361,42 +361,85 @@ async def tenant_users_create(slug):
     return jsonify({"_status": "OK", "tenant": slug, "username": payload["username"]}), 201
 
 
-@bp.route("/tenant-admin/webhook", methods=["GET"])
+@bp.route("/tenant-admin/webhooks", methods=["GET"])
 @admin_only
-async def webhook_get():
-    """Current webhook configuration; the secret itself is never returned."""
+async def webhooks_list():
+    """All webhooks incl. the implicit config-file one (id ``config``); secrets never returned."""
 
-    config = webhooks.get_webhook_config()
-    return jsonify({"url": config["url"], "has_secret": bool(config["secret"]), "source": config["source"]})
+    return jsonify([webhooks.public_webhook(doc) for doc in webhooks.list_webhooks()])
 
 
-@bp.route("/tenant-admin/webhook", methods=["PUT"])
+def _validate_webhook_payload(payload: dict) -> str | None:
+    url = (payload.get("url") or "").strip()
+    if "url" in payload and url and not url.startswith(("https://", "http://")):
+        return "url must be http(s)"
+    return None
+
+
+@bp.route("/tenant-admin/webhooks", methods=["POST"])
 @admin_only
-async def webhook_put():
-    """Set the webhook endpoint (control plane, overrides the config file).
+async def webhooks_create():
+    """Register a webhook: ``{url, secret?, name?, is_enabled?}``.
 
-    ``{"url": "", ...}`` removes the stored endpoint (falling back to the config
-    file); omitting ``secret`` keeps the stored one, ``"secret": ""`` clears it.
+    Every enabled webhook receives all tenant lifecycle events.
     """
 
     payload = await request.get_json(force=True)
-    url = (payload.get("url") or "").strip()
-    if url and not url.startswith(("https://", "http://")):
-        return jsonify({"_status": "ERR", "_error": {"message": "url must be http(s)"}}), 400
+    if not (payload.get("url") or "").strip():
+        return jsonify({"_status": "ERR", "_error": {"message": "url is required"}}), 400
+    error = _validate_webhook_payload(payload)
+    if error:
+        return jsonify({"_status": "ERR", "_error": {"message": error}}), 400
 
-    webhooks.set_webhook_config(url, payload.get("secret"))
-    config = webhooks.get_webhook_config()
-    return jsonify({"url": config["url"], "has_secret": bool(config["secret"]), "source": config["source"]})
+    doc = webhooks.create_webhook(
+        url=payload["url"],
+        secret=payload.get("secret") or "",
+        name=payload.get("name") or "",
+        is_enabled=payload.get("is_enabled", True),
+    )
+    return jsonify(webhooks.public_webhook(doc)), 201
 
 
-@bp.route("/tenant-admin/webhook/test", methods=["POST"])
+@bp.route("/tenant-admin/webhooks/<webhook_id>", methods=["PATCH"])
 @admin_only
-async def webhook_test():
-    """Deliver a ``tenant.test`` event synchronously and report the result."""
+async def webhooks_update(webhook_id):
+    """Update a webhook; ``secret`` is write-only (omit = keep, empty = clear).
 
-    config = webhooks.get_webhook_config()
-    if not config["url"]:
-        return jsonify({"_status": "ERR", "_error": {"message": "no webhook configured"}}), 400
+    The implicit ``config`` webhook cannot be edited here (change the config file).
+    """
+
+    if webhook_id == webhooks.CONFIG_WEBHOOK_ID:
+        return jsonify({"_status": "ERR", "_error": {"message": "the config-file webhook is read only"}}), 400
+
+    payload = await request.get_json(force=True)
+    error = _validate_webhook_payload(payload)
+    if error:
+        return jsonify({"_status": "ERR", "_error": {"message": error}}), 400
+
+    doc = webhooks.update_webhook(webhook_id, payload)
+    if doc is None:
+        return jsonify({"_status": "ERR", "_error": {"code": 404, "message": "Unknown webhook"}}), 404
+    return jsonify(webhooks.public_webhook(doc))
+
+
+@bp.route("/tenant-admin/webhooks/<webhook_id>", methods=["DELETE"])
+@admin_only
+async def webhooks_delete(webhook_id):
+    if webhook_id == webhooks.CONFIG_WEBHOOK_ID:
+        return jsonify({"_status": "ERR", "_error": {"message": "the config-file webhook is read only"}}), 400
+    if not webhooks.delete_webhook(webhook_id):
+        return jsonify({"_status": "ERR", "_error": {"code": 404, "message": "Unknown webhook"}}), 404
+    return jsonify({"_status": "OK"})
+
+
+@bp.route("/tenant-admin/webhooks/<webhook_id>/test", methods=["POST"])
+@admin_only
+async def webhooks_test(webhook_id):
+    """Deliver a ``tenant.test`` event to one webhook synchronously and report the result."""
+
+    hook = webhooks.get_webhook(webhook_id)
+    if hook is None:
+        return jsonify({"_status": "ERR", "_error": {"code": 404, "message": "Unknown webhook"}}), 404
 
     payload = {
         "event": webhooks.EVENT_TEST,
@@ -406,7 +449,7 @@ async def webhook_test():
         "timestamp": utcnow().isoformat(),
     }
     try:
-        response = webhooks.deliver_webhook(payload, config["url"], config["secret"])
+        response = webhooks.deliver_webhook(payload, hook["url"], hook.get("secret") or "")
     except Exception as error:
         return jsonify({"_status": "ERR", "_error": {"message": str(error)}}), 502
 

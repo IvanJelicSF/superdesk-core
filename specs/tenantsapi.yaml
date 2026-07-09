@@ -18,9 +18,10 @@ info:
     * **Exchange** (`/archive/send_to_tenant`) — served on tenant hosts; manually sends an
       archive item to a partner tenant, guarded by the `send_to_tenant` privilege.
 
-    **Outgoing webhooks** (not paths of this API): when a webhook endpoint is configured —
-    via `GET/PUT /tenant-admin/webhook` in the panel, with `TENANT_WEBHOOK_URL`/`_SECRET` as
-    config-file fallback — the server POSTs JSON lifecycle events to it: `tenant.suspended`,
+    **Outgoing webhooks** (not paths of this API): any number of webhook endpoints can be
+    registered via `/tenant-admin/webhooks` (`TENANT_WEBHOOK_URL`/`_SECRET` act as one
+    implicit webhook). The server POSTs JSON lifecycle events to every enabled endpoint:
+    `tenant.suspended`,
     `tenant.activated`, `tenant.deleted` (soft delete, data retained), `tenant.purged` (data
     emptied after `TENANT_DELETED_RETENTION_DAYS`) and `tenant.test` (manual test). Payload:
     `{event, tenant, status, hosts, timestamp, deleted_at?, purged_at?}`; delivered async with
@@ -219,13 +220,12 @@ paths:
         '404':
           description: Unknown tenant (or not authorized)
 
-  /tenant-admin/webhook:
+  /tenant-admin/webhooks:
     get:
-      summary: Current webhook configuration
+      summary: List webhooks
       description: |
-        The effective lifecycle-webhook endpoint. `source` says where it comes from:
-        `control-plane` (set via this API), `config` (TENANT_WEBHOOK_URL fallback) or
-        `none`. The secret is never returned, only `has_secret`.
+        All registered webhooks plus the implicit config-file one (id `config`, read only,
+        present when `TENANT_WEBHOOK_URL` is set). Secrets are never returned (`has_secret`).
       tags:
         - Tenant admin
       security:
@@ -237,15 +237,15 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/WebhookConfig'
+                type: array
+                items:
+                  $ref: '#/components/schemas/Webhook'
         '404':
           $ref: '#/components/responses/NotAuthorized'
-    put:
-      summary: Set the webhook endpoint
+    post:
+      summary: Register a webhook
       description: |
-        Stores the endpoint in the control plane (overriding the config file). An empty
-        `url` removes the stored endpoint, falling back to the config file. Omitting
-        `secret` keeps the stored secret; an empty string clears it.
+        Every enabled webhook receives all tenant lifecycle events.
       tags:
         - Tenant admin
       security:
@@ -259,35 +259,91 @@ paths:
               type: object
               required: [url]
               properties:
-                url:
-                  type: string
-                  example: https://hooks.example.com/tenants
-                secret:
-                  type: string
+                url: {type: string, example: "https://hooks.example.com/tenants"}
+                secret: {type: string, description: HMAC-SHA256 signing secret (write only).}
+                name: {type: string}
+                is_enabled: {type: boolean, default: true}
       responses:
-        '200':
-          description: Updated effective configuration
+        '201':
+          description: Created webhook
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/WebhookConfig'
+                $ref: '#/components/schemas/Webhook'
         '400':
-          description: URL is not http(s)
+          description: Missing or invalid url
         '404':
           $ref: '#/components/responses/NotAuthorized'
 
-  /tenant-admin/webhook/test:
-    post:
-      summary: Send a test webhook
+  /tenant-admin/webhooks/{webhookId}:
+    parameters:
+      - name: webhookId
+        in: path
+        required: true
+        schema: {type: string}
+    patch:
+      summary: Update a webhook
       description: |
-        Synchronously delivers a `tenant.test` event to the configured endpoint and
-        reports the receiver's HTTP status. `400` when no webhook is configured, `502`
-        when delivery fails (message in `_error.message`).
+        Same fields as create; `secret` is write-only (omit = keep, empty string = clear).
+        The implicit `config` webhook is read only (`400`).
       tags:
         - Tenant admin
       security:
         - adminSession: []
         - adminToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                url: {type: string}
+                secret: {type: string}
+                name: {type: string}
+                is_enabled: {type: boolean}
+      responses:
+        '200':
+          description: Updated webhook
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Webhook'
+        '400':
+          description: Invalid url or attempting to edit the config webhook
+        '404':
+          description: Unknown webhook (or not authorized)
+    delete:
+      summary: Delete a webhook
+      tags:
+        - Tenant admin
+      security:
+        - adminSession: []
+        - adminToken: []
+      responses:
+        '200':
+          description: Deleted
+        '400':
+          description: The config webhook cannot be deleted
+        '404':
+          description: Unknown webhook (or not authorized)
+
+  /tenant-admin/webhooks/{webhookId}/test:
+    post:
+      summary: Send a test event to one webhook
+      description: |
+        Synchronously delivers a `tenant.test` event and reports the receiver's HTTP status;
+        `502` with the error message when delivery fails. Works for the `config` webhook too.
+      tags:
+        - Tenant admin
+      security:
+        - adminSession: []
+        - adminToken: []
+      parameters:
+        - name: webhookId
+          in: path
+          required: true
+          schema: {type: string}
       responses:
         '200':
           description: Delivered
@@ -298,12 +354,10 @@ paths:
                 properties:
                   _status: {type: string, example: OK}
                   response_status: {type: integer, example: 204}
-        '400':
-          description: No webhook configured
         '502':
           description: Delivery failed
         '404':
-          $ref: '#/components/responses/NotAuthorized'
+          description: Unknown webhook (or not authorized)
 
   /tenant-admin/tenants:
     get:
@@ -716,14 +770,16 @@ components:
         or wrong host) — indistinguishable from a nonexistent route by design.
 
   schemas:
-    WebhookConfig:
+    Webhook:
       type: object
       properties:
+        _id: {type: string, description: Webhook id; the literal `config` for the config-file webhook.}
+        name: {type: string}
         url: {type: string}
         has_secret: {type: boolean}
-        source:
-          type: string
-          enum: [control-plane, config, none]
+        is_enabled: {type: boolean}
+        _created: {type: string, format: date-time}
+        _updated: {type: string, format: date-time}
 
     Account:
       type: object

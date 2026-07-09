@@ -351,6 +351,9 @@ CELERY_BROKER_URL = BROKER_URL
 CELERY_TASK_ALWAYS_EAGER = strtobool(env("CELERY_ALWAYS_EAGER", "false"))
 CELERY_TASK_SERIALIZER = "context-aware/json"
 
+#: content types workers accept; includes the superdesk context-aware serializer
+CELERY_ACCEPT_CONTENT = ["json", "application/x-context-aware-json"]
+
 #: Celery protocol to use
 #:
 #: .. versionchanged:: 3.6

@@ -55,17 +55,27 @@ async def _fan_out(task_name: str, *args, **kwargs):
     retry_backoff=True,
     retry_backoff_max=600,
 )
-def webhook_notify_task(self, payload: dict):
-    """Deliver a tenant lifecycle webhook (HTTPS POST, HMAC-signed when a secret is set)."""
+def webhook_notify_task(self, payload: dict, webhook_id: str = ""):
+    """Deliver a tenant lifecycle webhook (HTTPS POST, HMAC-signed when a secret is set).
 
-    from superdesk.tenants.webhooks import get_webhook_config, deliver_webhook
+    The webhook is re-read at delivery time so url/secret changes apply to
+    queued retries; a webhook deleted or disabled meanwhile skips silently.
+    """
 
-    config = get_webhook_config()
-    if not config["url"]:
+    from superdesk.tenants.webhooks import get_webhook, deliver_webhook
+
+    hook = get_webhook(webhook_id)
+    if hook is None or not hook.get("is_enabled", True) or not hook.get("url"):
+        logger.info("skipping webhook delivery, webhook %s gone or disabled", webhook_id)
         return
 
-    deliver_webhook(payload, config["url"], config["secret"])
-    logger.info("tenant webhook delivered event=%s tenant=%s", payload.get("event"), payload.get("tenant"))
+    deliver_webhook(payload, hook["url"], hook.get("secret") or "")
+    logger.info(
+        "tenant webhook delivered event=%s tenant=%s webhook=%s",
+        payload.get("event"),
+        payload.get("tenant"),
+        webhook_id,
+    )
 
 
 @celery.task(name="tenants.purge_deleted")

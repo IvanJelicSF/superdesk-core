@@ -239,18 +239,18 @@ Per-tenant profile details (roles, desks, avatars…) remain managed inside each
 existing user screens; the panel handles existence + credentials + rights across tenants.
 (`account_id` may appear on tenant user docs; ignore/hide it in the tenant user forms.)
 
-**Webhooks (settings screen)** — the panel configures the lifecycle-webhook endpoint that
-receives `tenant.suspended/activated/deleted/purged` events:
+**Webhooks (settings screen)** — the panel manages any number of lifecycle-webhook
+endpoints (`tenant.suspended/activated/deleted/purged` events):
 
-- `GET /tenant-admin/webhook` → `{url, has_secret, source}` — render the form from this;
-  `source: "config"` means the value comes from the server config file (show as such — saving
-  a URL here overrides it, saving an empty URL falls back to it).
-- `PUT /tenant-admin/webhook {url, secret?}` — url must be http(s) (`400` otherwise). The
-  secret is write-only: omit the field to keep the stored secret, send `""` to clear it,
-  never expect it back (`has_secret` is all you get — render a "secret is set" placeholder).
-- `POST /tenant-admin/webhook/test` — "Send test event" button; shows the receiver's HTTP
-  status on `200 {response_status}`, the error message on `502`, "no webhook configured"
-  on `400`.
+- `GET /tenant-admin/webhooks` → list of `{_id, name, url, has_secret, is_enabled}`.
+  The entry with `_id: "config"` is the config-file webhook — render it read-only.
+- Create: `POST /tenant-admin/webhooks {url, secret?, name?, is_enabled?}`. Every enabled
+  webhook receives all tenant lifecycle events.
+- Edit: `PATCH /tenant-admin/webhooks/{id}` (same fields). The secret is write-only:
+  omit to keep, send `""` to clear; render a "secret is set" placeholder from `has_secret`.
+- Delete: `DELETE /tenant-admin/webhooks/{id}`.
+- "Send test event" button per row: `POST /tenant-admin/webhooks/{id}/test` — show
+  `response_status` on 200, the error message on `502`.
 
 ## 9. Local dev / testing setup
 

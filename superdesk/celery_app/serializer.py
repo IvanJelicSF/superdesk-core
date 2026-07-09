@@ -100,12 +100,17 @@ class ContextAwareSerializerFactory:
         else:
             return self.try_cast(o)
 
-    def register_serializer(self, name: str, content_type: str = "application/json") -> None:
+    def register_serializer(self, name: str, content_type: str = "application/x-context-aware-json") -> None:
         """
             Registers a custom serializer with Kombu, which is used by Celery for message serialization.
 
         Args:
             name (str): The name under which the serializer should be registered.
             content_type (str): The MIME type associated with the serializer.
+                Must NOT be ``application/json``: kombu maps content types to
+                decoders globally, and hijacking the standard json type makes
+                celery's own event/gossip messages go through ``try_cast``,
+                which corrupts their fields (worker gossip then fails with
+                ``datetime - int`` errors on every heartbeat).
         """
         register(name, self.dumps, self.loads, content_type=content_type)

@@ -1,3 +1,5 @@
+import json
+
 from unittest import IsolatedAsyncioTestCase, mock
 
 from quart import Quart
@@ -275,3 +277,84 @@ class TenantAdminSessionTestCase(IsolatedAsyncioTestCase):
             )
         self.assertEqual(response.status_code, 201)
         handler.assert_awaited_once()
+
+
+class WebhooksAdminCrudTestCase(IsolatedAsyncioTestCase):
+    CONTROL_PLANE_DB = "sptests_controlplane_hookapi"
+
+    def setUp(self):
+        from quart import Quart
+        from superdesk.tenants import webhooks
+
+        self.webhooks = webhooks
+        self.async_app = SuperdeskAsyncApp(
+            MockWSGI(
+                config={
+                    **CONFIG,
+                    "TENANTS_MONGO_DBNAME": self.CONTROL_PLANE_DB,
+                    "TENANTS_MONGO_URI": f"mongodb://localhost/{self.CONTROL_PLANE_DB}",
+                }
+            )
+        )
+        webhooks._collection().database.client.drop_database(self.CONTROL_PLANE_DB)
+        app = Quart(__name__)
+        admin_api.init_app(app)
+        self.client = app.test_client()
+
+    def tearDown(self):
+        self.webhooks._collection().database.client.drop_database(self.CONTROL_PLANE_DB)
+        self.async_app.stop()
+
+    async def test_crud_flow(self):
+        response = await self.client.post(
+            "/tenant-admin/webhooks",
+            json={"url": "https://hooks.example.com/x", "secret": "s", "name": "x"},
+            headers=AUTH,
+        )
+        self.assertEqual(response.status_code, 201)
+        created = await response.get_json()
+        self.assertNotIn("secret", created)
+        self.assertTrue(created["has_secret"])
+        hook_id = created["_id"]
+
+        response = await self.client.get("/tenant-admin/webhooks", headers=AUTH)
+        self.assertEqual(len(await response.get_json()), 1)
+
+        response = await self.client.patch(
+            f"/tenant-admin/webhooks/{hook_id}", json={"is_enabled": False}, headers=AUTH
+        )
+        patched = await response.get_json()
+        self.assertFalse(patched["is_enabled"])
+
+        response = await self.client.delete(f"/tenant-admin/webhooks/{hook_id}", headers=AUTH)
+        self.assertEqual(response.status_code, 200)
+        response = await self.client.get("/tenant-admin/webhooks", headers=AUTH)
+        self.assertEqual(await response.get_json(), [])
+
+    async def test_create_validations(self):
+        response = await self.client.post("/tenant-admin/webhooks", json={"url": "ftp://nope"}, headers=AUTH)
+        self.assertEqual(response.status_code, 400)
+        response = await self.client.post("/tenant-admin/webhooks", json={}, headers=AUTH)
+        self.assertEqual(response.status_code, 400)
+
+    async def test_config_webhook_read_only(self):
+        self.async_app.wsgi.config["TENANT_WEBHOOK_URL"] = "https://conf.example.com"
+        response = await self.client.get("/tenant-admin/webhooks", headers=AUTH)
+        hooks = await response.get_json()
+        self.assertEqual(hooks[-1]["_id"], "config")
+        response = await self.client.patch("/tenant-admin/webhooks/config", json={"url": "https://x"}, headers=AUTH)
+        self.assertEqual(response.status_code, 400)
+        response = await self.client.delete("/tenant-admin/webhooks/config", headers=AUTH)
+        self.assertEqual(response.status_code, 400)
+
+    async def test_per_webhook_test_delivery(self):
+        response = await self.client.post("/tenant-admin/webhooks", json={"url": "https://t.example.com"}, headers=AUTH)
+        hook_id = (await response.get_json())["_id"]
+        with mock.patch("requests.post") as post:
+            post.return_value.status_code = 204
+            post.return_value.raise_for_status = mock.Mock()
+            response = await self.client.post(f"/tenant-admin/webhooks/{hook_id}/test", headers=AUTH)
+        payload = await response.get_json()
+        self.assertEqual(payload["response_status"], 204)
+        sent = json.loads(post.call_args.kwargs["data"])
+        self.assertEqual(sent["event"], "tenant.test")
