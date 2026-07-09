@@ -52,7 +52,7 @@ async def exchange_partners():
                 continue
             target = registry.get_by_id_sync(partner.get("tenant") or "")
             if target is not None and target.is_active and target.can_receive_from(source.id):
-                partners.append({"tenant": target.id, "hosts": list(target.hosts)})
+                partners.append({"tenant": target.id, "name": target.name, "hosts": list(target.hosts)})
 
     return jsonify({"partners": partners})
 

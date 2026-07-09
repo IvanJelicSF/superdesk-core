@@ -40,6 +40,10 @@ class Tenant:
     """
 
     id: str
+    #: human-readable display name (falls back to the id)
+    name: str = ""
+    #: free-text description shown in the admin panel
+    description: str = ""
     hosts: tuple[str, ...] = ()
     status: TenantStatus = TenantStatus.ACTIVE
     db_prefix: str = ""
@@ -54,6 +58,8 @@ class Tenant:
     def __post_init__(self):
         if not self.is_default and not TENANT_ID_RE.match(self.id):
             raise ValueError(f"Invalid tenant id '{self.id}', must match {TENANT_ID_RE.pattern}")
+        if not self.name:
+            object.__setattr__(self, "name", self.id)
         if not self.db_prefix:
             object.__setattr__(self, "db_prefix", default_db_prefix(self.id))
         if not self.elastic_prefix:
@@ -82,6 +88,8 @@ class Tenant:
     def from_dict(cls, doc: Mapping[str, Any]) -> "Tenant":
         return cls(
             id=doc["_id"],
+            name=doc.get("name") or "",
+            description=doc.get("description") or "",
             hosts=tuple(doc.get("hosts") or ()),
             status=TenantStatus(doc.get("status", TenantStatus.ACTIVE)),
             db_prefix=doc.get("db_prefix") or "",
@@ -95,6 +103,8 @@ class Tenant:
     def to_dict(self) -> dict[str, Any]:
         return {
             "_id": self.id,
+            "name": self.name,
+            "description": self.description,
             "hosts": list(self.hosts),
             "status": self.status.value,
             "db_prefix": self.db_prefix,

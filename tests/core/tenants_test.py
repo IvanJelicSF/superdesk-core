@@ -211,3 +211,22 @@ class TenantRegistryTestCase(TestCase):
             self.registry.get_all_active_sync()
         self.assertEqual([tenant.id for tenant in active], ["tenant-a"])
         collection.find.assert_called_once_with({"status": "active"})
+
+
+class TenantMetadataTestCase(TestCase):
+    def test_name_defaults_to_id(self):
+        tenant = make_tenant()
+        self.assertEqual(tenant.name, "tenant-a")
+        self.assertEqual(tenant.description, "")
+
+    def test_name_and_description_roundtrip(self):
+        tenant = make_tenant(name="Tenant A Newsroom", description="The A-team newsroom")
+        doc = tenant.to_dict()
+        self.assertEqual(doc["name"], "Tenant A Newsroom")
+        self.assertEqual(doc["description"], "The A-team newsroom")
+        restored = Tenant.from_dict(doc)
+        self.assertEqual(restored, tenant)
+
+    def test_empty_stored_name_falls_back_to_id(self):
+        restored = Tenant.from_dict({"_id": "tenant-a", "hosts": ["a.example.com"], "name": ""})
+        self.assertEqual(restored.name, "tenant-a")

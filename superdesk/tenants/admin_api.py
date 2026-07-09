@@ -168,7 +168,12 @@ async def tenants_create():
         return jsonify({"_status": "ERR", "_error": {"message": "admin requires username, password and email"}}), 400
 
     try:
-        tenant = Tenant(id=slug, hosts=hosts)
+        tenant = Tenant(
+            id=slug,
+            name=(payload.get("name") or "").strip(),
+            description=(payload.get("description") or "").strip(),
+            hosts=hosts,
+        )
     except ValueError as error:
         return jsonify({"_status": "ERR", "_error": {"message": str(error)}}), 400
     if not hosts:
@@ -222,6 +227,15 @@ async def tenants_update(slug):
             await notify_tenant_event(EVENT_SUSPENDED, get_tenant_doc(slug))
         elif status == TenantStatus.ACTIVE and doc.get("status") != TenantStatus.ACTIVE.value:
             await notify_tenant_event(EVENT_ACTIVATED, get_tenant_doc(slug))
+
+    metadata_updates = {}
+    if "name" in payload:
+        # empty name falls back to the slug on read
+        metadata_updates["name"] = (payload.get("name") or "").strip()
+    if "description" in payload:
+        metadata_updates["description"] = (payload.get("description") or "").strip()
+    if metadata_updates:
+        update_tenant(slug, metadata_updates)
 
     if "exchange_partners" in payload:
         partners = payload["exchange_partners"] or []

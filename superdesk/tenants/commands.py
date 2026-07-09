@@ -30,12 +30,14 @@ from .webhooks import notify_tenant_event, EVENT_SUSPENDED, EVENT_ACTIVATED, EVE
 
 @cli.command("tenants:create", tenant_command=False)
 @click.argument("slug")
+@click.option("--name", default="", help="Human-readable display name (defaults to the slug).")
+@click.option("--description", default="", help="Free-text description shown in the admin panel.")
 @click.option("--host", "hosts", multiple=True, required=True, help="Hostname served by this tenant (repeatable).")
 @click.option("--admin-username", help="Username for the initial admin user.")
 @click.option("--admin-password", help="Password for the initial admin user.")
 @click.option("--admin-email", help="Email for the initial admin user.")
 @click.option("--resume", is_flag=True, default=False, help="Resume provisioning an existing tenant.")
-async def tenants_create(slug, hosts, admin_username, admin_password, admin_email, resume):
+async def tenants_create(slug, name, description, hosts, admin_username, admin_password, admin_email, resume):
     """Create and provision a new tenant.
 
     Creates the tenant record, initializes mongo indexes and elastic mappings,
@@ -56,7 +58,7 @@ async def tenants_create(slug, hosts, admin_username, admin_password, admin_emai
             raise click.UsageError("Provide all of --admin-username, --admin-password and --admin-email, or none")
         admin = {"username": admin_username, "password": admin_password, "email": admin_email}
 
-    tenant = Tenant(id=slug, hosts=tuple(hosts))
+    tenant = Tenant(id=slug, name=name.strip(), description=description.strip(), hosts=tuple(hosts))
     await provision_tenant(tenant, admin=admin, resume=resume)
     echo(f"Tenant '{slug}' provisioned and active")
 
@@ -70,7 +72,7 @@ async def tenants_list():
         echo("No tenants")
         return
     for doc in docs:
-        echo(f"{doc['_id']}\t{doc.get('status')}\t{','.join(doc.get('hosts') or [])}")
+        echo(f"{doc['_id']}\t{doc.get('name') or doc['_id']}\t{doc.get('status')}\t{','.join(doc.get('hosts') or [])}")
 
 
 @cli.command("tenants:enable", tenant_command=False)
@@ -112,12 +114,23 @@ async def tenants_disable(slug):
     help="Exchange direction for --add-partner.",
 )
 @click.option("--remove-partner", help="Remove the given tenant id from the exchange partners.")
-async def tenants_update(slug, add_partner, direction, remove_partner):
-    """Update a tenant's exchange partner allowlist."""
+@click.option("--name", default=None, help="Set the human-readable display name.")
+@click.option("--description", default=None, help="Set the description shown in the admin panel.")
+async def tenants_update(slug, add_partner, direction, remove_partner, name, description):
+    """Update a tenant's display name, description or exchange partner allowlist."""
 
     doc = get_tenant_doc(slug)
     if doc is None:
         raise click.UsageError(f"Tenant '{slug}' not found")
+
+    metadata_updates = {}
+    if name is not None:
+        metadata_updates["name"] = name.strip()
+    if description is not None:
+        metadata_updates["description"] = description.strip()
+    if metadata_updates:
+        update_tenant(slug, metadata_updates)
+        echo(f"Tenant '{slug}' metadata updated")
 
     partners = [p for p in (doc.get("exchange_partners") or [])]
     if remove_partner:
