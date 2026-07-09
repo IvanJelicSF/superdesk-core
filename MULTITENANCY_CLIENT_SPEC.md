@@ -237,9 +237,12 @@ receives `tenant.suspended/activated/deleted/purged` events:
 
 ## 9. Local dev / testing setup
 
-1. In superdesk-core (branch `multitenant`): start services (`docker compose up -d`), then in the
-   server settings set `MULTI_TENANT_ENABLED=true` (+ `SHARED_ACCOUNTS_ENABLED=true` for the
-   switcher).
+1. In superdesk-core (branch `multitenant`): `docker compose --profile server up -d` builds and
+   runs the full server from this repo — API on `http://localhost:5000/api`, websocket on
+   `ws://localhost:5100`, celery worker + beat, admin user `admin`/`admin`, data initialized.
+   For multi-tenant development set `MULTI_TENANT_ENABLED: "true"` (+ `SHARED_ACCOUNTS_ENABLED`
+   for the switcher) in the `x-superdesk-environment` block of `docker-compose.yml` and
+   restart. CLI commands run inside the container: `docker compose exec server quart <command>`.
 2. Create tenants:
    `python manage.py tenants:create tenant-a --host tenant-a.localhost --admin-username admin --admin-password admin --admin-email admin@example.com`
    (repeat for `tenant-b`), then allow exchange both ways:

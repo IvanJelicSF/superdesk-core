@@ -1,0 +1,13 @@
+env/
+.git/
+.mypy_cache/
+.pytest_cache/
+**/__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+docs/_build/
+node_modules/
+.idea/
+.vscode/

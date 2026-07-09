@@ -1,7 +1,41 @@
-# Note: this file is mainly used for tests. If you want to run Superdesk or its
-# services from docker, please use docker-compose.yml found in main Superdesk
-# repository (https://github.com/superdesk/superdesk)
+# Backing services (mongo/elastic/redis) for tests, plus a full superdesk
+# server stack built from this repo (api + websocket + celery worker/beat)
+# so a client can connect to http://localhost:5000/api.
+#
+#   docker compose up -d                     # services only (tests)
+#   docker compose --profile server up -d    # services + superdesk server
+#
+# Default admin credentials: admin / admin (see SUPERDESK_ADMIN_* below).
+# CLI commands run through the quart CLI inside the server container, e.g.:
+#   docker compose exec server quart tenants:create tenant-a --host tenant-a.localhost ...
+# (QUART_APP is preset in the image; add it manually for `docker compose run`.)
+# For multi-tenant development flip the MULTI_TENANT_ENABLED/SHARED_ACCOUNTS_ENABLED
+# env vars below, uncomment TENANT_ADMIN_* and create tenants with tenants:create.
 name: superdesk-core-services
+
+x-superdesk-environment: &superdesk-environment
+    SECRET_KEY: dev-secret-change-me
+    MONGO_URI: mongodb://mongo/superdesk
+    CONTENTAPI_MONGO_URI: mongodb://mongo/contentapi
+    ARCHIVED_URI: mongodb://mongo/archived
+    LEGAL_ARCHIVE_URI: mongodb://mongo/legal_archive
+    TENANTS_MONGO_URI: mongodb://mongo/superdesk_tenants
+    ELASTICSEARCH_URL: http://elastic:9200
+    CONTENTAPI_ELASTICSEARCH_URL: http://elastic:9200
+    REDIS_URL: redis://redis:6379
+    CELERY_BROKER_URL: redis://redis:6379
+    SUPERDESK_URL: http://localhost:5000/api
+    SUPERDESK_CLIENT_URL: http://localhost:9000
+    SUPERDESK_ADMIN_USERNAME: admin
+    SUPERDESK_ADMIN_PASSWORD: admin
+    SUPERDESK_ADMIN_EMAIL: admin@example.com
+    # --- multi-tenancy (see MULTITENANCY_IMPLEMENTATION.md) ---
+    MULTI_TENANT_ENABLED: "false"
+    SHARED_ACCOUNTS_ENABLED: "false"
+    # TENANT_ADMIN_HOST: admin.localhost
+    # TENANT_ADMIN_API_TOKEN: dev-admin-token
+    # TENANT_WEBHOOK_URL: https://hooks.example.com/tenants
+
 services:
     elastic:
         image: docker.elastic.co/elasticsearch/elasticsearch:7.17.22
@@ -42,6 +76,58 @@ services:
             nproc:
                 soft: 65535
                 hard: 65535
+
+    server:
+        build: .
+        profiles: ["server"]
+        ports:
+            - "5000:5000"
+        environment:
+            <<: *superdesk-environment
+            WEB_CONCURRENCY: "2"
+        depends_on:
+            - mongo
+            - elastic
+            - redis
+        networks:
+            - superdesk-core
+
+    ws:
+        build: .
+        profiles: ["server"]
+        command: python -m superdesk.ws
+        ports:
+            - "5100:5100"
+        environment:
+            <<: *superdesk-environment
+            WS_HOST: "0.0.0.0"
+            WS_PORT: "5100"
+        depends_on:
+            - redis
+        networks:
+            - superdesk-core
+
+    worker:
+        build: .
+        profiles: ["server"]
+        command: celery -A docker.worker:celery worker --loglevel=info
+        environment: *superdesk-environment
+        depends_on:
+            - mongo
+            - elastic
+            - redis
+        networks:
+            - superdesk-core
+
+    beat:
+        build: .
+        profiles: ["server"]
+        command: celery -A docker.worker:celery beat --loglevel=info --schedule=/tmp/celerybeatschedule.db
+        environment: *superdesk-environment
+        depends_on:
+            - redis
+        networks:
+            - superdesk-core
 
 networks:
     superdesk-core:
