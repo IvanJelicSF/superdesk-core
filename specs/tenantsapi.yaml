@@ -345,6 +345,11 @@ paths:
                   type: string
                   pattern: '^[a-z][a-z0-9-]{0,61}$'
                   example: tenant-a
+                name:
+                  type: string
+                  description: Display name (defaults to the slug).
+                description:
+                  type: string
                 hosts:
                   type: array
                   minItems: 1
@@ -419,10 +424,17 @@ paths:
               properties:
                 status:
                   $ref: '#/components/schemas/TenantStatus'
+                name:
+                  type: string
+                  description: Display name (empty falls back to the slug).
+                description:
+                  type: string
                 exchange_partners:
                   type: array
                   items:
                     $ref: '#/components/schemas/ExchangePartner'
+                exchange_copy_media:
+                  type: boolean
       responses:
         '200':
           description: Updated tenant
@@ -492,6 +504,8 @@ paths:
                         tenant:
                           type: string
                           example: tenant-a
+                        name:
+                          type: string
                         hosts:
                           type: array
                           items:
@@ -503,6 +517,86 @@ paths:
                       (gates the "Tenant administration" menu entry).
         '401':
           description: Not authenticated
+
+  /accounts/me/switch-token:
+    post:
+      summary: Issue a one-time token to sign in on another tenant
+      description: |
+        Tenant-switcher SSO, step 1. Issues a short-lived (60 s), single-use,
+        signed token bound to the target tenant. The client redirects to
+        `https://{target host}/?tenant_switch={token}` and the target tenant
+        exchanges it via `POST /accounts/switch-login`. Requires
+        `SHARED_ACCOUNTS_ENABLED` and an account-linked user.
+      tags:
+        - Accounts
+      security:
+        - session: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tenant]
+              properties:
+                tenant:
+                  type: string
+                  example: tenant-b
+      responses:
+        '200':
+          description: Token issued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token: {type: string}
+                  tenant: {type: string}
+                  hosts:
+                    type: array
+                    items: {type: string}
+        '400':
+          description: Unknown/inactive target tenant or the account has no user there
+        '401':
+          description: Not authenticated
+        '404':
+          description: Shared accounts disabled or user has no account link
+
+  /accounts/switch-login:
+    post:
+      summary: Exchange a one-time switch token for a session on this tenant
+      description: |
+        Tenant-switcher SSO, step 2, called on the **target** tenant host.
+        Unauthenticated by design — it is the sign-in. Validates signature,
+        age (60 s), single-use nonce and the tenant binding, then creates a
+        session for the account's linked user. The response has the same
+        shape as the `auth_db` login response.
+      tags:
+        - Accounts
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token: {type: string}
+      responses:
+        '200':
+          description: Session created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  _id: {type: string, description: Session id}
+                  token: {type: string, description: Session token}
+                  user: {type: string, description: User id}
+        '401':
+          description: Invalid, expired, replayed or misdirected token (indistinguishable)
+        '404':
+          description: Unknown tenant host or shared accounts disabled
 
   /exchange/partners:
     get:
@@ -531,6 +625,8 @@ paths:
                         tenant:
                           type: string
                           example: tenant-b
+                        name:
+                          type: string
                         hosts:
                           type: array
                           items:
@@ -668,6 +764,13 @@ components:
         slug:
           type: string
           example: tenant-a
+        name:
+          type: string
+          description: Human-readable display name (defaults to the slug).
+          example: Tenant A Newsroom
+        description:
+          type: string
+          description: Free-text description shown in the admin panel.
         hosts:
           type: array
           items:
@@ -694,6 +797,13 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ExchangePartner'
+        exchange_copy_media:
+          type: boolean
+          default: true
+          description: >
+            Copy exchanged media (pictures/audio/video) into this tenant's storage and rewrite
+            asset urls to this tenant; when false, exchanged items keep the source tenant's
+            asset urls.
         provisioning:
           type: object
           description: Completed provisioning steps mapped to timestamps.

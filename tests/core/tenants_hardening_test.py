@@ -109,14 +109,28 @@ class MediaPrefixTestCase(IsolatedAsyncioTestCase):
         with tenant_context(TENANT_A):
             self.assertEqual(get_media_prefix(), "http://tenant-a.example.com/api/upload-raw")
 
-    async def test_request_origin_wins(self):
+    async def test_request_origin_wins_for_own_host(self):
         from quart import Quart
         from superdesk.upload import get_media_prefix
 
         app = Quart(__name__)
-        async with app.test_request_context("/api/archive", headers={"Host": "tenant-a.localhost:5000"}):
+        # the request host belongs to the bound tenant: keep its exact origin (incl. port)
+        async with app.test_request_context("/api/archive", headers={"Host": "tenant-a.example.com:5000"}):
             with tenant_context(TENANT_A):
-                self.assertEqual(get_media_prefix(), "http://tenant-a.localhost:5000/api/upload-raw")
+                self.assertEqual(get_media_prefix(), "http://tenant-a.example.com:5000/api/upload-raw")
+
+    async def test_foreign_request_host_loses_to_bound_tenant(self):
+        from quart import Quart
+        from superdesk.upload import get_media_prefix
+        from superdesk.core.tenants import Tenant
+
+        tenant_b = Tenant(id="tenant-b", hosts=("tenant-b.example.com",))
+        app = Quart(__name__)
+        # cross-tenant work (e.g. exchange media copy) inside another tenant's request:
+        # the bound tenant's host must win over the ambient request origin
+        async with app.test_request_context("/api/archive", headers={"Host": "tenant-a.example.com:5000"}):
+            with tenant_context(tenant_b):
+                self.assertEqual(get_media_prefix(), "http://tenant-b.example.com/api/upload-raw")
 
     def test_explicit_tenant_override_wins(self):
         from superdesk.upload import get_media_prefix

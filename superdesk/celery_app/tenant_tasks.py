@@ -24,18 +24,27 @@ logger = logging.getLogger(__name__)
 def fan_out_task(task_name: str, *args, **kwargs):
     """Beat dispatcher: re-publish a scheduled task once per active tenant."""
 
+    return _fan_out(task_name, *args, **kwargs)
+
+
+async def _fan_out(task_name: str, *args, **kwargs):
+    from inspect import isawaitable
+
     registry = get_current_async_app().tenants
     tenants = registry.get_all_active_sync()
     published = 0
     for tenant in tenants:
         if not tenant.feature_enabled(f"beat:{task_name}", True):
             continue
-        celery.signature(task_name, args=args, kwargs=kwargs).apply_async(
+        # the worker task class has an async apply_async; plain celery would return sync
+        response = celery.signature(task_name, args=args, kwargs=kwargs).apply_async(
             headers={TENANT_TASK_HEADER: tenant.id},
         )
+        if isawaitable(response):
+            await response
         published += 1
 
-    logger.debug("fanned out task=%s tenants=%d", task_name, published)
+    logger.info("fanned out task=%s tenants=%d", task_name, published)
 
 
 @celery.task(

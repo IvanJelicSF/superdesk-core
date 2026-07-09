@@ -116,8 +116,14 @@ async def tenants_disable(slug):
 @click.option("--remove-partner", help="Remove the given tenant id from the exchange partners.")
 @click.option("--name", default=None, help="Set the human-readable display name.")
 @click.option("--description", default=None, help="Set the description shown in the admin panel.")
-async def tenants_update(slug, add_partner, direction, remove_partner, name, description):
-    """Update a tenant's display name, description or exchange partner allowlist."""
+@click.option(
+    "--copy-media/--no-copy-media",
+    "copy_media",
+    default=None,
+    help="Copy exchanged media into this tenant's storage (default) or keep source asset urls.",
+)
+async def tenants_update(slug, add_partner, direction, remove_partner, name, description, copy_media):
+    """Update a tenant's display name, description, media copying or exchange partners."""
 
     doc = get_tenant_doc(slug)
     if doc is None:
@@ -128,6 +134,8 @@ async def tenants_update(slug, add_partner, direction, remove_partner, name, des
         metadata_updates["name"] = name.strip()
     if description is not None:
         metadata_updates["description"] = description.strip()
+    if copy_media is not None:
+        metadata_updates["exchange_copy_media"] = copy_media
     if metadata_updates:
         update_tenant(slug, metadata_updates)
         echo(f"Tenant '{slug}' metadata updated")

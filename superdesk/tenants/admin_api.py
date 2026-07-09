@@ -234,6 +234,8 @@ async def tenants_update(slug):
         metadata_updates["name"] = (payload.get("name") or "").strip()
     if "description" in payload:
         metadata_updates["description"] = (payload.get("description") or "").strip()
+    if "exchange_copy_media" in payload:
+        metadata_updates["exchange_copy_media"] = bool(payload["exchange_copy_media"])
     if metadata_updates:
         update_tenant(slug, metadata_updates)
 

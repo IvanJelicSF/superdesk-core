@@ -17,6 +17,17 @@ from superdesk.core.tenants import Tenant, tenant_context
 logger = logging.getLogger(__name__)
 
 
+def _media_id_from_href(href: str) -> str | None:
+    """Best-effort media id from a superdesk media url (formatters may drop the id)."""
+    if "/upload-raw/" not in href:
+        return None
+    name = href.rsplit("/", 1)[-1]
+    # strip a file extension when present (gridfs urls append one, amazon does not)
+    if "." in name:
+        name = name.rsplit(".", 1)[0]
+    return name or None
+
+
 def _iter_renditions(item: dict) -> Iterator[dict]:
     for rendition in (item.get("renditions") or {}).values():
         yield rendition
@@ -41,7 +52,7 @@ async def copy_item_media(item: dict, target: Tenant) -> int:
 
     collected = []
     for rendition in _iter_renditions(item):
-        media_id = rendition.get("media")
+        media_id = rendition.get("media") or _media_id_from_href(rendition.get("href") or "")
         if not media_id:
             continue
         media_file = await media_storage.get_async(media_id)

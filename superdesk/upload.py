@@ -159,8 +159,13 @@ def get_media_prefix() -> str:
 
     parsed = urlparse(media_prefix)
     try:
+        # the request origin keeps the exact scheme/host/port the client used, but
+        # only while it belongs to the bound tenant: during cross-tenant work (e.g.
+        # exchange media copy inside the target's context) the tenant host must win
         if request:
-            return f"{request.host_url.rstrip('/')}{parsed.path}"
+            request_host = (request.host or "").split(":")[0].lower()
+            if tenant is None or tenant.is_default or request_host in tenant.hosts:
+                return f"{request.host_url.rstrip('/')}{parsed.path}"
     except RuntimeError:
         pass
 

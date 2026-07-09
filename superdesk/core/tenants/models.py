@@ -53,6 +53,9 @@ class Tenant:
     feature_flags: Mapping[str, bool] = field(default_factory=dict)
     #: content-exchange partner allowlist: ({"tenant": id, "direction": "send"|"receive"|"both"}, ...)
     exchange_partners: tuple = ()
+    #: copy exchanged media (pictures/audio/video) into this tenant's storage;
+    #: when off, exchanged items keep the source tenant's asset urls
+    exchange_copy_media: bool = True
     is_default: bool = False
 
     def __post_init__(self):
@@ -98,6 +101,7 @@ class Tenant:
             config_overrides=doc.get("config_overrides") or {},
             feature_flags=doc.get("feature_flags") or {},
             exchange_partners=tuple(doc.get("exchange_partners") or ()),
+            exchange_copy_media=bool(doc.get("exchange_copy_media", True)),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -113,4 +117,5 @@ class Tenant:
             "config_overrides": dict(self.config_overrides),
             "feature_flags": dict(self.feature_flags),
             "exchange_partners": list(self.exchange_partners),
+            "exchange_copy_media": self.exchange_copy_media,
         }

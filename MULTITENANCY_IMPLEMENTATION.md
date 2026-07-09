@@ -238,6 +238,11 @@ same subscriber just switches to the `http_push` transmitter.
   `source`; guid unchanged so re-sends update rather than duplicate), copies media, then enqueues
   the delivery task with the target tenant's Celery header (the sender never writes to the target
   db directly — the tenant boundary is crossed only via the media-storage API and the task queue).
+- **Per-tenant media copy switch**: `Tenant.exchange_copy_media` (default on; CLI
+  `tenants:update --copy-media/--no-copy-media`, admin API `PATCH {exchange_copy_media}`).
+  On: media (pictures/audio/video) is copied into the target tenant's storage and asset urls
+  are rewritten to the target. Off: exchanged items keep the source tenant's asset urls
+  verbatim (the source media endpoint must be reachable/authorized for target users).
 - **Media** (`media.py::copy_item_media`): rendition + association-rendition files are read in the
   source context and written inside `tenant_context(target)`; `media`/`href` are rewritten in the
   payload. On the target side `transfer_renditions`/ingest skip re-downloading because the media
@@ -267,8 +272,16 @@ same subscriber just switches to the `http_push` transmitter.
   dual-write hook; `accounts:tenants --email ...` CLI.
 - **Tenant switcher endpoint** (`superdesk/accounts/api.py`): `GET /accounts/me/tenants`
   (session-authenticated) returns the active tenants + hosts where the current user's account has
-  a linked user; the client redirects to the chosen host and the user logs in there (sessions
-  never span tenants).
+  a linked user; the client redirects to the chosen host.
+- **Tenant switcher SSO** (same module): sessions never span tenants, but switching signs the
+  user in automatically. `POST /accounts/me/switch-token {tenant}` (session-authenticated)
+  issues a signed, 60-second, single-use token (itsdangerous over the shared `SECRET_KEY`;
+  nonce in the `account_switch_tokens` control-plane collection, TTL-cleaned) bound to the
+  target tenant; the client redirects to `https://{host}/?tenant_switch={token}` and the target
+  tenant exchanges it via unauthenticated `POST /accounts/switch-login {token}`, which validates
+  signature/age/nonce/tenant-binding and creates a session for the linked user through the
+  `oauth` resource (response shaped like the `auth_db` login). Any failure is a uniform `401`
+  and the client falls back to the manual login screen.
 - **HTTP tenant admin API** (`superdesk/tenants/admin_api.py`), in `CORE_APPS`:
   `GET|POST /tenant-admin/tenants`, `GET|PATCH|DELETE /tenant-admin/tenants/<slug>[?purge=1]`
   (create provisions via the same resumable flow as the CLI; PATCH updates status and the partner
@@ -349,6 +362,11 @@ same subscriber just switches to the `http_push` transmitter.
   media, celery, websocket) — to be added on top of the platform.
 
 ## Known v1 limitations / follow-ups
+
+- Worker log noise: the prefork consumer logs a recurring
+  `unsupported operand type(s) for -: 'datetime.datetime' and 'int'` at ERROR (MainProcess)
+  in the docker stack; it does not block task consumption (tasks and beat fan-out execute)
+  but needs a root-cause pass (appears tied to the hub/gossip/heartbeat timers).
 
 - Config overrides only apply to runtime `get_app_config()` reads; boot-time config is global.
 - The websocket server matches tenants by subdomain label only (no registry lookup in that process).

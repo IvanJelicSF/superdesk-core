@@ -62,8 +62,8 @@ Both flags are `false` (or absent — treat absent as `false`) on single-tenant 
 
 ```json
 { "tenants": [
-    { "tenant": "tenant-a", "hosts": ["tenant-a.example.com"] },
-    { "tenant": "tenant-b", "hosts": ["tenant-b.example.com"] }
+    { "tenant": "tenant-a", "name": "Tenant A Newsroom", "hosts": ["tenant-a.example.com"] },
+    { "tenant": "tenant-b", "name": "Tenant B Newsroom", "hosts": ["tenant-b.example.com"] }
   ],
   "is_super_admin": false }
 ```
@@ -81,9 +81,19 @@ Returns `{"tenants": []}` when shared accounts are off or the user has no accoun
   `hosts` contains `window.location.host`).
 - Selecting another tenant navigates the browser to `https://{hosts[0]}` (top-level navigation,
   not XHR — it is a different origin).
-- **Sessions do not span tenants** (by design): after the redirect the user lands on the other
-  tenant's login screen and signs in with the same credentials. Copy suggestion on the menu item
-  or login screen: "You are switching to {tenant}; sign in with your usual password."
+- **Sessions do not span tenants**, but the switcher signs the user in automatically via a
+  one-time switch token (SSO):
+  1. `POST /accounts/me/switch-token {"tenant": "tenant-b"}` (session-authenticated, on the
+     current tenant) → `200 {"token", "tenant", "hosts"}`; `400` unknown/inactive target or
+     the account has no linked user there.
+  2. Redirect to `https://{hosts[0]}/?tenant_switch={token}`.
+  3. On boot the client strips the parameter from the URL (`history.replaceState` — it must
+     not stay in history) and exchanges it: `POST /accounts/switch-login {"token": ...}`
+     (unauthenticated, on the target host) → `200 {_id, token, user}` — same shape as the
+     `auth_db` login response; start the session from it. `401` on an invalid, expired (60 s),
+     replayed (single-use) or misdirected token — fall back to the login screen silently.
+- Fallback copy (SSO failure) on the menu item or login screen: "You are switching to
+  {tenant}; sign in with your usual password."
 - Cache the response per session; refresh on demand (menu open) is fine — it's a cheap call.
 
 ## 5. UI feature 2 — "Send to tenant" action
@@ -91,7 +101,7 @@ Returns `{"tenants": []}` when shared accounts are off or the user has no accoun
 **Target picker endpoint:** `GET /exchange/partners` (session-authenticated)
 
 ```json
-{ "partners": [ { "tenant": "tenant-b", "hosts": ["tenant-b.example.com"] } ] }
+{ "partners": [ { "tenant": "tenant-b", "name": "Tenant B Newsroom", "hosts": ["tenant-b.example.com"] } ] }
 ```
 
 Only tenants this tenant may send to (partner allowlist checked in both directions, active
@@ -192,10 +202,17 @@ session (the tenant session does not carry over):
 **Tenants** — `GET /tenant-admin/tenants` list (slug, status, hosts, partners, provisioning
 markers); detail/actions:
 
-- Create (`POST /tenant-admin/tenants {slug, hosts[], admin?{username,password,email}, resume?}`)
+- Create (`POST /tenant-admin/tenants {slug, name?, description?, hosts[], admin?{username,password,email}, resume?}`)
   — show a provisioning-in-progress state; `409` = exists (offer "resume"); `400` = invalid
   slug (`^[a-z][a-z0-9-]{0,61}$`) or missing hosts.
 - Suspend / re-enable (`PATCH {status: "suspended"|"active"}`).
+- Media copying toggle (`PATCH {exchange_copy_media: bool}`, default `true`): when on,
+  exchanged media (pictures/audio/video) is copied into this tenant's storage and asset urls
+  point at this tenant; when off, exchanged items keep the source tenant's asset urls
+  (note for the panel: warn that source-tenant urls require the source media to be reachable
+  by this tenant's users).
+- Edit display name / description (`PATCH {name?, description?}`; tenants have a `name`
+  falling back to the slug and a free-text `description` — show the name everywhere, slug as id)
 - Exchange partners editor (`PATCH {exchange_partners: [{tenant, direction}]}`) — direction
   `send`/`receive`/`both`; `400` names unknown partner tenants.
 - Delete (`DELETE /tenant-admin/tenants/{slug}`) — only when suspended (`409` otherwise).

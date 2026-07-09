@@ -154,3 +154,108 @@ class TransmitterValidationTestCase(IsolatedAsyncioTestCase):
         item = json.loads(delivered["item"])
         self.assertEqual(item["extra"]["original_tenant"], "tenant-a")
         self.assertEqual(item["extra"]["original_item_id"], "item-1")
+
+
+NO_COPY_TARGET = Tenant(
+    id="tenant-b",
+    hosts=("b.example.com",),
+    exchange_partners=({"tenant": "tenant-a", "direction": "receive"},),
+    exchange_copy_media=False,
+)
+
+
+class MediaIdFromHrefTestCase(IsolatedAsyncioTestCase):
+    def test_media_id_parsing(self):
+        from superdesk.tenants.exchange.media import _media_id_from_href
+
+        self.assertEqual(_media_id_from_href("http://a.example.com/api/upload-raw/6a4fb9e7d70d.jpg"), "6a4fb9e7d70d")
+        self.assertEqual(_media_id_from_href("http://a.example.com/api/upload-raw/6a4fb9e7d70d"), "6a4fb9e7d70d")
+        self.assertIsNone(_media_id_from_href("http://elsewhere.example.com/some/image.jpg"))
+        self.assertIsNone(_media_id_from_href(""))
+
+
+class CopyMediaFromHrefTestCase(IsolatedAsyncioTestCase):
+    """Renditions without a media key (some formatters drop it) still copy via href."""
+
+    def setUp(self):
+        self.app = SuperdeskAsyncApp(MockWSGI(config={"MULTI_TENANT_ENABLED": True}))
+        self.media = FakeMediaStorage()
+        self.app.wsgi.media = self.media
+
+    def tearDown(self):
+        self.app.stop()
+
+    async def test_copy_via_href_only(self):
+        with tenant_context(SOURCE):
+            source_id = await self.media.put_async(b"AUDIO", filename="clip.mp3", content_type="audio/mpeg")
+            item = {
+                "guid": "item-1",
+                "associations": {
+                    "audioclip": {
+                        "renditions": {"original": {"href": f"http://a.example.com/api/upload-raw/{source_id}"}}
+                    }
+                },
+            }
+            copied = await copy_item_media(item, TARGET)
+        self.assertEqual(copied, 1)
+        rendition = item["associations"]["audioclip"]["renditions"]["original"]
+        self.assertIn(rendition["media"], self.media.stores["tenant-b"])
+
+
+class ExchangeCopyMediaFlagTestCase(IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.app = SuperdeskAsyncApp(MockWSGI(config={"MULTI_TENANT_ENABLED": True}))
+        self.transmitter = InternalTenantTransmitter()
+
+    def tearDown(self):
+        self.app.stop()
+
+    def test_flag_roundtrip_and_default(self):
+        self.assertTrue(Tenant.from_dict({"_id": "tenant-x", "hosts": []}).exchange_copy_media)
+        self.assertFalse(Tenant.from_dict(NO_COPY_TARGET.to_dict()).exchange_copy_media)
+
+    async def test_no_copy_keeps_source_assets(self):
+        queue_item = {
+            "item_id": "item-1",
+            "formatted_item": json.dumps(
+                {
+                    "guid": "item-1",
+                    "renditions": {"original": {"href": "http://a.example.com/api/upload-raw/abc.jpg", "media": "abc"}},
+                }
+            ),
+            "destination": {"config": {"tenant": "tenant-b"}},
+        }
+        tenants = {"tenant-b": NO_COPY_TARGET}
+        with (
+            mock.patch.object(TenantRegistry, "get_by_id_sync", side_effect=tenants.get),
+            mock.patch("superdesk.tenants.exchange.transmitter.copy_item_media", mock.AsyncMock()) as copy_mock,
+            mock.patch("superdesk.tenants.exchange.receiver.deliver_to_tenant") as task_mock,
+        ):
+            task_mock.apply_async = mock.AsyncMock()
+            with tenant_context(SOURCE):
+                await self.transmitter._transmit(queue_item, subscriber={})
+
+        copy_mock.assert_not_awaited()
+        sent = json.loads(task_mock.apply_async.await_args.kwargs["kwargs"]["item"])
+        self.assertEqual(sent["renditions"]["original"]["href"], "http://a.example.com/api/upload-raw/abc.jpg")
+        self.assertEqual(sent["renditions"]["original"]["media"], "abc")
+
+    async def test_copy_enabled_copies(self):
+        queue_item = {
+            "item_id": "item-1",
+            "formatted_item": json.dumps({"guid": "item-1"}),
+            "destination": {"config": {"tenant": "tenant-b"}},
+        }
+        tenants = {"tenant-b": TARGET}  # default: exchange_copy_media=True
+        with (
+            mock.patch.object(TenantRegistry, "get_by_id_sync", side_effect=tenants.get),
+            mock.patch(
+                "superdesk.tenants.exchange.transmitter.copy_item_media", mock.AsyncMock(return_value=0)
+            ) as copy_mock,
+            mock.patch("superdesk.tenants.exchange.receiver.deliver_to_tenant") as task_mock,
+        ):
+            task_mock.apply_async = mock.AsyncMock()
+            with tenant_context(SOURCE):
+                await self.transmitter._transmit(queue_item, subscriber={})
+
+        copy_mock.assert_awaited_once()

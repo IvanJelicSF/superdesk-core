@@ -71,12 +71,19 @@ class InternalTenantTransmitter(PublishService):
         item["extra"]["original_item_id"] = queue_item.get("item_id")
         item.setdefault("source", source.id)
 
-        copied = await copy_item_media(item, target)
+        if target.exchange_copy_media:
+            # copy pictures/audio/video into the target's storage and rewrite
+            # media/href references so the item is fully self-contained there
+            copied = await copy_item_media(item, target)
+        else:
+            # the target keeps the source tenant's asset urls as they are
+            copied = 0
         logger.info(
-            "exchange transmit item=%s source=%s target=%s media=%d",
+            "exchange transmit item=%s source=%s target=%s copy_media=%s media=%d",
             queue_item.get("item_id"),
             source.id,
             target.id,
+            target.exchange_copy_media,
             copied,
         )
 
