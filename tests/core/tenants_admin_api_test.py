@@ -84,17 +84,55 @@ class TenantAdminApiTestCase(IsolatedAsyncioTestCase):
             response = await self.client.delete("/tenant-admin/tenants/tenant-a", headers=AUTH)
         self.assertEqual(response.status_code, 409)
 
-    async def test_delete_with_purge(self):
+    async def test_delete_soft_deletes_with_retention(self):
         doc = {"_id": "tenant-a", "status": "suspended", "hosts": ["a.example.com"]}
+        notify = mock.AsyncMock()
         with (
             mock.patch.object(admin_api, "get_tenant_doc", return_value=doc),
-            mock.patch.object(admin_api, "purge_tenant_storage") as purge,
-            mock.patch.object(admin_api, "delete_tenant_record") as delete,
+            mock.patch.object(admin_api, "mark_tenant_deleted") as mark,
+            mock.patch.object(admin_api, "notify_tenant_event", notify),
         ):
-            response = await self.client.delete("/tenant-admin/tenants/tenant-a?purge=1", headers=AUTH)
+            response = await self.client.delete("/tenant-admin/tenants/tenant-a", headers=AUTH)
         self.assertEqual(response.status_code, 200)
-        purge.assert_called_once()
-        delete.assert_called_once_with("tenant-a")
+        payload = await response.get_json()
+        self.assertEqual(payload["retention_days"], 30)
+        mark.assert_called_once_with("tenant-a")
+        notify.assert_awaited_once()
+        self.assertEqual(notify.await_args.args[0], "tenant.deleted")
+
+    async def test_delete_already_deleted(self):
+        doc = {"_id": "tenant-a", "status": "deleted", "hosts": []}
+        with mock.patch.object(admin_api, "get_tenant_doc", return_value=doc):
+            response = await self.client.delete("/tenant-admin/tenants/tenant-a", headers=AUTH)
+        self.assertEqual(response.status_code, 409)
+
+    async def test_patch_restores_deleted_tenant(self):
+        doc = {"_id": "tenant-a", "status": "deleted", "hosts": []}
+        notify = mock.AsyncMock()
+        with (
+            mock.patch.object(admin_api, "get_tenant_doc", return_value=doc),
+            mock.patch.object(admin_api, "restore_deleted_tenant") as restore,
+            mock.patch.object(admin_api, "notify_tenant_event", notify),
+        ):
+            response = await self.client.patch(
+                "/tenant-admin/tenants/tenant-a", json={"status": "active"}, headers=AUTH
+            )
+        self.assertEqual(response.status_code, 200)
+        restore.assert_called_once_with("tenant-a")
+        self.assertEqual(notify.await_args.args[0], "tenant.activated")
+
+    async def test_patch_restore_purged_rejected(self):
+        doc = {"_id": "tenant-a", "status": "deleted", "hosts": []}
+        with (
+            mock.patch.object(admin_api, "get_tenant_doc", return_value=doc),
+            mock.patch.object(
+                admin_api, "restore_deleted_tenant", side_effect=ValueError("purged, cannot be restored")
+            ),
+        ):
+            response = await self.client.patch(
+                "/tenant-admin/tenants/tenant-a", json={"status": "active"}, headers=AUTH
+            )
+        self.assertEqual(response.status_code, 409)
 
     async def test_patch_status_and_partners(self):
         doc = {"_id": "tenant-a", "status": "active", "hosts": []}
@@ -102,6 +140,7 @@ class TenantAdminApiTestCase(IsolatedAsyncioTestCase):
             mock.patch.object(admin_api, "get_tenant_doc", return_value=doc),
             mock.patch.object(admin_api, "set_tenant_status") as set_status,
             mock.patch.object(admin_api, "update_tenant") as update,
+            mock.patch.object(admin_api, "notify_tenant_event", mock.AsyncMock()),
         ):
             response = await self.client.patch(
                 "/tenant-admin/tenants/tenant-a",

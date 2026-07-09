@@ -34,11 +34,13 @@ from .service import (
     get_tenant_doc,
     list_tenant_docs,
     set_tenant_status,
+    mark_tenant_deleted,
+    restore_deleted_tenant,
     update_tenant,
-    delete_tenant_record,
     TenantExistsError,
 )
-from .provisioning import provision_tenant, purge_tenant_storage
+from .provisioning import provision_tenant
+from .webhooks import notify_tenant_event, EVENT_SUSPENDED, EVENT_ACTIVATED, EVENT_DELETED
 
 logger = logging.getLogger(__name__)
 
@@ -198,9 +200,26 @@ async def tenants_update(slug):
 
     if payload.get("status"):
         try:
-            set_tenant_status(slug, TenantStatus(payload["status"]))
+            status = TenantStatus(payload["status"])
         except ValueError:
             return jsonify({"_status": "ERR", "_error": {"message": f"invalid status '{payload['status']}'"}}), 400
+
+        if status == TenantStatus.DELETED:
+            return jsonify({"_status": "ERR", "_error": {"message": "use DELETE to delete a tenant"}}), 400
+
+        try:
+            if doc.get("status") == TenantStatus.DELETED.value and status == TenantStatus.ACTIVE:
+                # undo a soft delete (only until the retention purge has run)
+                restore_deleted_tenant(slug)
+            else:
+                set_tenant_status(slug, status)
+        except ValueError as error:
+            return jsonify({"_status": "ERR", "_error": {"message": str(error)}}), 409
+
+        if status == TenantStatus.SUSPENDED:
+            await notify_tenant_event(EVENT_SUSPENDED, get_tenant_doc(slug))
+        elif status == TenantStatus.ACTIVE and doc.get("status") != TenantStatus.ACTIVE.value:
+            await notify_tenant_event(EVENT_ACTIVATED, get_tenant_doc(slug))
 
     if "exchange_partners" in payload:
         partners = payload["exchange_partners"] or []
@@ -218,16 +237,23 @@ async def tenants_update(slug):
 @bp.route("/tenant-admin/tenants/<slug>", methods=["DELETE"])
 @admin_only
 async def tenants_delete(slug):
+    """Soft delete: mark the tenant deleted; its data is emptied by the periodic
+    purge after ``TENANT_DELETED_RETENTION_DAYS``. Until then it can be restored
+    via ``PATCH {"status": "active"}``.
+    """
+
     doc = get_tenant_doc(slug)
     if doc is None:
         return jsonify({"_status": "ERR", "_error": {"code": 404, "message": "Unknown tenant"}}), 404
     if doc.get("status") == TenantStatus.ACTIVE.value:
         return jsonify({"_status": "ERR", "_error": {"message": "tenant is active, disable it first"}}), 409
+    if doc.get("status") == TenantStatus.DELETED.value:
+        return jsonify({"_status": "ERR", "_error": {"message": "tenant is already deleted"}}), 409
 
-    if request.args.get("purge"):
-        purge_tenant_storage(Tenant.from_dict(doc))
-    delete_tenant_record(slug)
-    return jsonify({"_status": "OK"}), 200
+    mark_tenant_deleted(slug)
+    await notify_tenant_event(EVENT_DELETED, get_tenant_doc(slug))
+    retention_days = int(get_app_config("TENANT_DELETED_RETENTION_DAYS", 30))
+    return jsonify({"_status": "OK", "retention_days": retention_days}), 200
 
 
 @bp.route("/tenant-admin/accounts", methods=["GET"])

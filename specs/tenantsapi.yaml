@@ -18,6 +18,14 @@ info:
     * **Exchange** (`/archive/send_to_tenant`) — served on tenant hosts; manually sends an
       archive item to a partner tenant, guarded by the `send_to_tenant` privilege.
 
+    **Outgoing webhooks** (not paths of this API): when `TENANT_WEBHOOK_URL` is configured the
+    server POSTs JSON lifecycle events to it — `tenant.suspended`, `tenant.activated`,
+    `tenant.deleted` (soft delete, data retained), `tenant.purged` (data emptied after
+    `TENANT_DELETED_RETENTION_DAYS`). Payload:
+    `{event, tenant, status, hosts, timestamp, deleted_at?, purged_at?}`; delivered async with
+    retries; signed with HMAC-SHA256 in `X-Superdesk-Signature: sha256=<hexdigest>` when
+    `TENANT_WEBHOOK_SECRET` is set.
+
 paths:
   /tenant-admin/login:
     post:
@@ -305,9 +313,15 @@ paths:
           description: Unknown tenant (or not authorized)
     patch:
       summary: Update tenant status or exchange partners
+      description: |
+        `status: suspended|active` (fires `tenant.suspended`/`tenant.activated` webhooks).
+        Setting `active` on a soft-deleted tenant restores it — allowed only until the
+        retention purge has emptied it (`409` afterwards). `status: deleted` is rejected
+        (use DELETE).
       tags:
         - Tenant admin
       security:
+        - adminSession: []
         - adminToken: []
       requestBody:
         required: true
@@ -334,26 +348,32 @@ paths:
         '404':
           description: Unknown tenant (or not authorized)
     delete:
-      summary: Delete a tenant
+      summary: Soft-delete a tenant
       description: |
-        The tenant must be disabled (suspended) first. With `?purge=1` all tenant mongo
-        databases (incl. GridFS media and versions) and elastic indexes are dropped;
-        S3 media is not touched.
+        The tenant must be disabled (suspended) first. The tenant is only *marked* deleted
+        (`status: deleted`, `deleted_at` stamped): its hosts answer 404, it drops out of beat
+        fan-out, exchange targets and tenant switchers, but **all data stays intact**. The
+        periodic purge empties it (mongo databases incl. GridFS and versions, elastic indexes;
+        not S3 media) after `TENANT_DELETED_RETENTION_DAYS` (default 30). Until purged it can
+        be restored with `PATCH {"status": "active"}`. Fires the `tenant.deleted` webhook
+        (and later `tenant.purged` when the purge runs).
       tags:
         - Tenant admin
       security:
+        - adminSession: []
         - adminToken: []
-      parameters:
-        - name: purge
-          in: query
-          required: false
-          schema:
-            type: boolean
       responses:
         '200':
-          description: Deleted
+          description: Marked deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  _status: {type: string, example: OK}
+                  retention_days: {type: integer, example: 30}
         '409':
-          description: Tenant is still active
+          description: Tenant is still active, or already deleted
         '404':
           description: Unknown tenant (or not authorized)
 
@@ -584,6 +604,16 @@ components:
           additionalProperties:
             type: string
             format: date-time
+        deleted_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Set when the tenant was soft-deleted; the purge runs TENANT_DELETED_RETENTION_DAYS later.
+        purged_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Set once the retention purge emptied the tenant; restoring is no longer possible.
         _created:
           type: string
           format: date-time

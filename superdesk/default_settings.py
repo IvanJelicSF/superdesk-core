@@ -249,6 +249,16 @@ TENANT_ADMIN_HOST = env("TENANT_ADMIN_HOST", "")
 #: static bearer token guarding the tenant admin api
 TENANT_ADMIN_API_TOKEN = env("TENANT_ADMIN_API_TOKEN", "")
 
+#: https endpoint receiving tenant lifecycle webhooks (suspended/activated/deleted/purged);
+#: empty = webhooks disabled
+TENANT_WEBHOOK_URL = env("TENANT_WEBHOOK_URL", "")
+
+#: optional secret for signing webhook payloads (X-Superdesk-Signature: sha256=<hmac>)
+TENANT_WEBHOOK_SECRET = env("TENANT_WEBHOOK_SECRET", "")
+
+#: how long deleted tenants keep their data before the periodic purge empties them
+TENANT_DELETED_RETENTION_DAYS = int(env("TENANT_DELETED_RETENTION_DAYS", "30"))
+
 #: elastic url
 ELASTICSEARCH_URL = env("ELASTICSEARCH_URL", "http://localhost:9200")
 CONTENTAPI_ELASTICSEARCH_URL = env("CONTENTAPI_ELASTICSEARCH_URL", ELASTICSEARCH_URL)
@@ -482,6 +492,12 @@ CELERY_BEAT_SCHEDULE = {
     "subscribers:schedule_update": {
         "task": "superdesk.publish_async.resources.subscribers.subscribers_schedule.update_subscriber_activation_states",
         "schedule": crontab(minute=0, hour=local_to_utc_hour(0)),
+    },
+    "tenants:purge_deleted": {
+        # noop unless MULTI_TENANT_ENABLED; empties tenants deleted more than
+        # TENANT_DELETED_RETENTION_DAYS ago
+        "task": "tenants.purge_deleted",
+        "schedule": crontab(minute=45, hour=local_to_utc_hour(2)),
     },
 }
 

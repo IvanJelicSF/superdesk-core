@@ -35,6 +35,9 @@ every code path, so single-tenant deployments behave exactly as before with zero
 | `SHARED_ACCOUNTS_AUTHORITATIVE` | `false` | Phase 2: passwords only on the account, no tenant-local fallback (M11) |
 | `TENANT_ADMIN_HOST` | `""` | Reserved non-tenant host serving the tenant admin api (M11) |
 | `TENANT_ADMIN_API_TOKEN` | `""` | Bearer token guarding the tenant admin api; empty = api disabled (M11) |
+| `TENANT_WEBHOOK_URL` | `""` | HTTPS endpoint for tenant lifecycle webhooks; empty = disabled |
+| `TENANT_WEBHOOK_SECRET` | `""` | HMAC-SHA256 signing secret for webhook payloads |
+| `TENANT_DELETED_RETENTION_DAYS` | `30` | Days deleted tenants keep their data before the periodic purge |
 
 Operational requirement: with mongo auth and per-tenant databases, the mongo URI **must** carry an
 explicit `authSource` (e.g. `authSource=admin`) — the legacy default of `authSource=<dbname>` does
@@ -282,6 +285,19 @@ same subscriber just switches to the `http_push` transmitter.
   `PATCH /tenant-admin/accounts/<email>` (flags, password; refuses revoking your own admin
   access) and `POST /tenant-admin/tenants/<slug>/users` (creates a tenant-local user inside
   `tenant_context`, auto-linking the shared account).
+- **Soft delete + retention purge**: deleting a tenant (CLI `tenants:delete` or the DELETE
+  endpoint) only marks it `deleted` + stamps `deleted_at` — hosts answer 404, beat/exchange/
+  switcher skip it, data stays. The tenant-agnostic beat task `tenants.purge_deleted` (daily)
+  empties tenants deleted more than `TENANT_DELETED_RETENTION_DAYS` ago (mongo dbs incl. GridFS
+  and versions, elastic indexes; S3 stays) and stamps `purged_at`. Until purged, a deleted
+  tenant can be restored (`tenants:enable` / `PATCH {"status": "active"}`); afterwards restore
+  is refused. `tenants:purge SLUG --yes` forces an immediate purge (ops escape hatch). The
+  tombstone record is kept (audit + host reservation).
+- **Lifecycle webhooks** (`superdesk/tenants/webhooks.py` + `tenants.webhook_notify` task):
+  with `TENANT_WEBHOOK_URL` set, `tenant.suspended`, `tenant.activated`, `tenant.deleted` and
+  `tenant.purged` events POST `{event, tenant, status, hosts, timestamp, deleted_at?,
+  purged_at?}` to the configured endpoint — delivered via Celery with exponential-backoff
+  retries and HMAC-SHA256-signed (`X-Superdesk-Signature`) when `TENANT_WEBHOOK_SECRET` is set.
 - **Client integration**: `client_config` exposes `multi_tenant_enabled`,
   `shared_accounts_enabled` and `tenant_admin_url`; `GET /accounts/me/tenants` includes
   `is_super_admin` to gate the client's "Tenant administration" menu entry. Client-side spec:

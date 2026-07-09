@@ -63,6 +63,25 @@ def set_tenant_status(tenant_id: str, status: TenantStatus) -> None:
     update_tenant(tenant_id, {"status": status.value})
 
 
+def mark_tenant_deleted(tenant_id: str) -> None:
+    """Soft delete: the tenant stays in the system (hosts answer 404, beat skips it)
+    with its data intact until the retention purge empties it.
+    """
+
+    update_tenant(tenant_id, {"status": TenantStatus.DELETED.value, "deleted_at": utcnow()})
+
+
+def restore_deleted_tenant(tenant_id: str) -> None:
+    """Undo a soft delete; only possible while the data has not been purged yet."""
+
+    doc = get_tenant_doc(tenant_id)
+    if doc is None:
+        raise TenantNotFoundError(tenant_id)
+    if doc.get("purged_at"):
+        raise ValueError(f"Tenant '{tenant_id}' has been purged and cannot be restored")
+    update_tenant(tenant_id, {"status": TenantStatus.ACTIVE.value, "deleted_at": None})
+
+
 def mark_provisioning_step(tenant_id: str, step: str) -> None:
     update_tenant(tenant_id, {f"provisioning.{step}": utcnow()})
 

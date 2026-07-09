@@ -198,8 +198,13 @@ markers); detail/actions:
 - Suspend / re-enable (`PATCH {status: "suspended"|"active"}`).
 - Exchange partners editor (`PATCH {exchange_partners: [{tenant, direction}]}`) — direction
   `send`/`receive`/`both`; `400` names unknown partner tenants.
-- Delete (`DELETE /tenant-admin/tenants/{slug}?purge=1`) — only when suspended (`409`
-  otherwise); confirm dialog must spell out that purge drops all databases and media.
+- Delete (`DELETE /tenant-admin/tenants/{slug}`) — only when suspended (`409` otherwise).
+  This is a **soft delete**: the response returns `retention_days`; the tenant stays listed
+  with `status: deleted` and `deleted_at` set, and its data is emptied automatically after
+  the retention period. The UI should show deleted tenants with a "purges on {deleted_at +
+  retention_days}" hint and a **Restore** action (`PATCH {"status": "active"}`) — available
+  until `purged_at` is set (restore then returns `409`; render purged tenants as final).
+  No purge option in the panel; server ops can force it via the `tenants:purge` CLI.
 
 **Accounts (cross-tenant users)** — `GET /tenant-admin/accounts` list (email, username, flags,
 `tenants: [...]` where the account has users); actions:

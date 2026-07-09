@@ -11,6 +11,8 @@
 import click
 from click import echo
 
+from superdesk.utc import utcnow
+from superdesk.core import get_app_config
 from superdesk.commands.async_cli import cli
 from superdesk.core.tenants import Tenant, TenantStatus
 
@@ -18,10 +20,12 @@ from .service import (
     get_tenant_doc,
     list_tenant_docs,
     set_tenant_status,
+    mark_tenant_deleted,
+    restore_deleted_tenant,
     update_tenant,
-    delete_tenant_record,
 )
 from .provisioning import provision_tenant, purge_tenant_storage
+from .webhooks import notify_tenant_event, EVENT_SUSPENDED, EVENT_ACTIVATED, EVENT_DELETED, EVENT_PURGED
 
 
 @cli.command("tenants:create", tenant_command=False)
@@ -72,9 +76,19 @@ async def tenants_list():
 @cli.command("tenants:enable", tenant_command=False)
 @click.argument("slug")
 async def tenants_enable(slug):
-    """Re-enable a suspended tenant."""
+    """Re-enable a suspended (or soft-deleted, not yet purged) tenant."""
 
-    set_tenant_status(slug, TenantStatus.ACTIVE)
+    doc = get_tenant_doc(slug)
+    if doc is None:
+        raise click.UsageError(f"Tenant '{slug}' not found")
+    if doc.get("status") == TenantStatus.DELETED.value:
+        try:
+            restore_deleted_tenant(slug)
+        except ValueError as error:
+            raise click.UsageError(str(error))
+    else:
+        set_tenant_status(slug, TenantStatus.ACTIVE)
+    await notify_tenant_event(EVENT_ACTIVATED, get_tenant_doc(slug))
     echo(f"Tenant '{slug}' enabled")
 
 
@@ -84,6 +98,7 @@ async def tenants_disable(slug):
     """Suspend a tenant: requests are rejected and beat tasks stop fanning out to it."""
 
     set_tenant_status(slug, TenantStatus.SUSPENDED)
+    await notify_tenant_event(EVENT_SUSPENDED, get_tenant_doc(slug))
     echo(f"Tenant '{slug}' disabled")
 
 
@@ -119,14 +134,12 @@ async def tenants_update(slug, add_partner, direction, remove_partner):
 
 @cli.command("tenants:delete", tenant_command=False)
 @click.argument("slug")
-@click.option("--purge", is_flag=True, default=False, help="Also drop the tenant databases and elastic indexes.")
-@click.option("--yes", is_flag=True, default=False, help="Skip the confirmation prompt.")
-async def tenants_delete(slug, purge, yes):
-    """Delete a tenant. The tenant must be disabled first.
+async def tenants_delete(slug):
+    """Soft-delete a tenant. The tenant must be disabled first.
 
-    Without ``--purge`` only the registry record is removed (data stays).
-    With ``--purge`` all tenant mongo databases (incl. GridFS media and
-    versions) and elastic indexes are dropped. S3 media is not touched.
+    The tenant stays in the system with its data intact; the periodic purge
+    empties it after ``TENANT_DELETED_RETENTION_DAYS``. Until then it can be
+    restored with ``tenants:enable``.
     """
 
     doc = get_tenant_doc(slug)
@@ -134,12 +147,37 @@ async def tenants_delete(slug, purge, yes):
         raise click.UsageError(f"Tenant '{slug}' not found")
     if doc.get("status") == TenantStatus.ACTIVE.value:
         raise click.UsageError(f"Tenant '{slug}' is active, run tenants:disable first")
+    if doc.get("status") == TenantStatus.DELETED.value:
+        raise click.UsageError(f"Tenant '{slug}' is already deleted")
 
-    if purge and not yes:
+    mark_tenant_deleted(slug)
+    await notify_tenant_event(EVENT_DELETED, get_tenant_doc(slug))
+    retention_days = get_app_config("TENANT_DELETED_RETENTION_DAYS", 30)
+    echo(f"Tenant '{slug}' marked deleted; data will be purged after {retention_days} days")
+
+
+@cli.command("tenants:purge", tenant_command=False)
+@click.argument("slug")
+@click.option("--yes", is_flag=True, default=False, help="Skip the confirmation prompt.")
+async def tenants_purge(slug, yes):
+    """Immediately empty a soft-deleted tenant, without waiting for the retention purge.
+
+    Drops all tenant mongo databases (incl. GridFS media and versions) and
+    elastic indexes. S3 media is not touched. No undo.
+    """
+
+    doc = get_tenant_doc(slug)
+    if doc is None:
+        raise click.UsageError(f"Tenant '{slug}' not found")
+    if doc.get("status") != TenantStatus.DELETED.value:
+        raise click.UsageError(f"Tenant '{slug}' is not deleted, run tenants:delete first")
+    if doc.get("purged_at"):
+        raise click.UsageError(f"Tenant '{slug}' is already purged")
+
+    if not yes:
         click.confirm(f"Drop ALL databases and indexes of tenant '{slug}'?", abort=True)
 
-    if purge:
-        purge_tenant_storage(Tenant.from_dict(doc))
-
-    delete_tenant_record(slug)
-    echo(f"Tenant '{slug}' deleted" + (" (data purged)" if purge else " (data kept)"))
+    purge_tenant_storage(Tenant.from_dict(doc))
+    update_tenant(slug, {"purged_at": utcnow()})
+    await notify_tenant_event(EVENT_PURGED, get_tenant_doc(slug))
+    echo(f"Tenant '{slug}' purged")
