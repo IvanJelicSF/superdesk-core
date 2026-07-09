@@ -201,6 +201,40 @@ paths:
         '401':
           description: Not authenticated
 
+  /exchange/partners:
+    get:
+      summary: List tenants the current tenant may send content to
+      description: |
+        Partner allowlist entries with direction `send`/`both` whose target tenant is active
+        and accepts content from this tenant. Empty on single-tenant deployments. Backs the
+        target picker of "send to tenant" and the `internal_tenant` destination form.
+      tags:
+        - Exchange
+      security:
+        - session: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  partners:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        tenant:
+                          type: string
+                          example: tenant-b
+                        hosts:
+                          type: array
+                          items:
+                            type: string
+        '401':
+          description: Not authenticated
+
   /archive/send_to_tenant:
     post:
       summary: Send an archive item to a partner tenant

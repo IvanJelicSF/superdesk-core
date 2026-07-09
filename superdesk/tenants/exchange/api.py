@@ -31,6 +31,32 @@ SEND_TO_TENANT_PRIVILEGE = "send_to_tenant"
 bp = Blueprint("tenant_exchange_api", __name__)
 
 
+@bp.route("/exchange/partners", methods=["GET"])
+@blueprint_auth()
+async def exchange_partners():
+    """List the active tenants the current tenant may send content to.
+
+    Backs the target picker of the "send to tenant" action and the
+    ``internal_tenant`` destination form.
+    """
+
+    from superdesk.core import get_current_async_app
+    from superdesk.core.tenants import try_get_current_tenant
+
+    source = try_get_current_tenant()
+    partners: list = []
+    if source is not None and not source.is_default:
+        registry = get_current_async_app().tenants
+        for partner in source.exchange_partners:
+            if partner.get("direction", "both") not in ("send", "both"):
+                continue
+            target = registry.get_by_id_sync(partner.get("tenant") or "")
+            if target is not None and target.is_active and target.can_receive_from(source.id):
+                partners.append({"tenant": target.id, "hosts": list(target.hosts)})
+
+    return jsonify({"partners": partners})
+
+
 @bp.route("/archive/send_to_tenant", methods=["POST"])
 @blueprint_auth()
 async def send_to_tenant():
@@ -86,3 +112,9 @@ def init_app(app) -> None:
         description=lazy_gettext("Allows sending content to partner tenants."),
     )
     app.register_blueprint(bp)
+    app.client_config.update(
+        {
+            "multi_tenant_enabled": bool(app.config.get("MULTI_TENANT_ENABLED")),
+            "shared_accounts_enabled": bool(app.config.get("SHARED_ACCOUNTS_ENABLED")),
+        }
+    )
