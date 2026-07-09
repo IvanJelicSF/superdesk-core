@@ -283,6 +283,8 @@ same subscriber just switches to the `http_push` transmitter.
   land on the host they were requested from. Control-plane tokens are not needed.
 - Not included: behave e2e suites for provisioning and the exchange round-trip (follow-up).
 - New settings: `TENANT_ADMIN_HOST`, `TENANT_ADMIN_API_TOKEN`, `SHARED_ACCOUNTS_AUTHORITATIVE`.
+- OpenAPI spec for all new endpoints: [`specs/tenantsapi.yaml`](specs/tenantsapi.yaml)
+  (same 3.0.2 convention as the existing `specs/*.yaml`).
 - Tests: `tests/core/tenants_admin_api_test.py` (guard fail-closed matrix, list/create/patch/delete
   flows) plus the mapping/authoritative additions in `tests/core/tenants_accounts_test.py`.
 

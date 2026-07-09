@@ -1,0 +1,338 @@
+openapi: '3.0.2'
+
+info:
+  title: Superdesk Multi-Tenancy API
+  version: "1.0"
+  description: |
+    HTTP surface added by multi-tenancy (see MULTITENANCY_IMPLEMENTATION.md).
+
+    Three groups of endpoints:
+
+    * **Tenant admin** (`/tenant-admin/*`) — control-plane administration, served only on the
+      reserved non-tenant host (`TENANT_ADMIN_HOST`) and guarded by a static bearer token
+      (`TENANT_ADMIN_API_TOKEN`). Fail-closed: unless multi-tenancy is enabled, the token is
+      configured and matches, and the request host equals the admin host, every endpoint
+      responds `404` — the API does not advertise itself.
+    * **Accounts** (`/accounts/me/tenants`) — served on tenant hosts to session-authenticated
+      users; powers the client tenant switcher.
+    * **Exchange** (`/archive/send_to_tenant`) — served on tenant hosts; manually sends an
+      archive item to a partner tenant, guarded by the `send_to_tenant` privilege.
+
+paths:
+  /tenant-admin/tenants:
+    get:
+      summary: List tenants
+      tags:
+        - Tenant admin
+      security:
+        - adminToken: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Tenant'
+        '404':
+          $ref: '#/components/responses/NotAuthorized'
+    post:
+      summary: Create and provision a tenant
+      description: |
+        Creates the tenant record and runs the resumable provisioning flow (mongo indexes,
+        elastic mappings, seed data, optional initial admin user). Re-run with `resume: true`
+        to continue a partially provisioned tenant.
+      tags:
+        - Tenant admin
+      security:
+        - adminToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [slug, hosts]
+              properties:
+                slug:
+                  type: string
+                  pattern: '^[a-z][a-z0-9-]{0,61}$'
+                  example: tenant-a
+                hosts:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: string
+                  example: [tenant-a.example.com]
+                admin:
+                  type: object
+                  description: Initial admin user, created in the tenant.
+                  required: [username, password, email]
+                  properties:
+                    username: {type: string}
+                    password: {type: string}
+                    email: {type: string, format: email}
+                resume:
+                  type: boolean
+                  default: false
+      responses:
+        '201':
+          description: Tenant provisioned and active
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Tenant'
+        '400':
+          description: Invalid slug, missing hosts or incomplete admin spec
+        '409':
+          description: Tenant already exists (use `resume` to continue provisioning)
+        '404':
+          $ref: '#/components/responses/NotAuthorized'
+
+  /tenant-admin/tenants/{slug}:
+    parameters:
+      - name: slug
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      summary: Get a tenant
+      tags:
+        - Tenant admin
+      security:
+        - adminToken: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Tenant'
+        '404':
+          description: Unknown tenant (or not authorized)
+    patch:
+      summary: Update tenant status or exchange partners
+      tags:
+        - Tenant admin
+      security:
+        - adminToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  $ref: '#/components/schemas/TenantStatus'
+                exchange_partners:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/ExchangePartner'
+      responses:
+        '200':
+          description: Updated tenant
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Tenant'
+        '400':
+          description: Invalid status or unknown partner tenant
+        '404':
+          description: Unknown tenant (or not authorized)
+    delete:
+      summary: Delete a tenant
+      description: |
+        The tenant must be disabled (suspended) first. With `?purge=1` all tenant mongo
+        databases (incl. GridFS media and versions) and elastic indexes are dropped;
+        S3 media is not touched.
+      tags:
+        - Tenant admin
+      security:
+        - adminToken: []
+      parameters:
+        - name: purge
+          in: query
+          required: false
+          schema:
+            type: boolean
+      responses:
+        '200':
+          description: Deleted
+        '409':
+          description: Tenant is still active
+        '404':
+          description: Unknown tenant (or not authorized)
+
+  /accounts/me/tenants:
+    get:
+      summary: List the current user's tenants
+      description: |
+        Active tenants where the logged-in user's shared account has a linked user.
+        Requires `SHARED_ACCOUNTS_ENABLED`; returns an empty list otherwise. The client
+        redirects to one of the returned hosts and the user logs in there — sessions
+        never span tenants.
+      tags:
+        - Accounts
+      security:
+        - session: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tenants:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        tenant:
+                          type: string
+                          example: tenant-a
+                        hosts:
+                          type: array
+                          items:
+                            type: string
+        '401':
+          description: Not authenticated
+
+  /archive/send_to_tenant:
+    post:
+      summary: Send an archive item to a partner tenant
+      description: |
+        Manual counterpart of the subscriber-based exchange: formats the item as ninjs,
+        copies its media into the target tenant's storage and ingests it there. Both
+        tenants must allow each other on their `exchange_partners` lists. Requires the
+        `send_to_tenant` privilege.
+      tags:
+        - Exchange
+      security:
+        - session: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [item_id, target_tenant]
+              properties:
+                item_id:
+                  type: string
+                target_tenant:
+                  type: string
+                  example: tenant-b
+                desk:
+                  type: string
+                  description: Target desk id for auto-fetch.
+                stage:
+                  type: string
+                  description: Target stage id for auto-fetch.
+                auto_fetch:
+                  type: boolean
+                  default: false
+      responses:
+        '200':
+          description: Item queued for delivery to the target tenant
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  _status: {type: string, example: OK}
+                  item_id: {type: string}
+                  target_tenant: {type: string}
+        '400':
+          description: Missing fields, unknown/inactive target or tenants are not exchange partners
+        '401':
+          description: Not authenticated
+        '403':
+          description: Missing the send_to_tenant privilege
+        '404':
+          description: Item not found
+
+components:
+  securitySchemes:
+    adminToken:
+      type: http
+      scheme: bearer
+      description: |
+        Static token from `TENANT_ADMIN_API_TOKEN`; requests must also target
+        `TENANT_ADMIN_HOST`. Failing the guard yields `404`, not `401`.
+    session:
+      type: apiKey
+      in: cookie
+      name: session_token
+      description: Regular Superdesk session (Authorization header token also accepted).
+
+  responses:
+    NotAuthorized:
+      description: |
+        Returned whenever the admin guard fails (multi-tenancy off, token missing/wrong,
+        or wrong host) — indistinguishable from a nonexistent route by design.
+
+  schemas:
+    TenantStatus:
+      type: string
+      enum: [creating, active, suspended, deleted]
+
+    ExchangePartner:
+      type: object
+      required: [tenant]
+      properties:
+        tenant:
+          type: string
+          example: tenant-b
+        direction:
+          type: string
+          enum: [send, receive, both]
+          default: both
+
+    Tenant:
+      type: object
+      properties:
+        slug:
+          type: string
+          example: tenant-a
+        hosts:
+          type: array
+          items:
+            type: string
+        status:
+          $ref: '#/components/schemas/TenantStatus'
+        db_prefix:
+          type: string
+          example: sd_tenant_a
+        elastic_prefix:
+          type: string
+          example: sd_tenant_a
+        s3_subfolder:
+          type: string
+          nullable: true
+        config_overrides:
+          type: object
+          additionalProperties: true
+        feature_flags:
+          type: object
+          additionalProperties:
+            type: boolean
+        exchange_partners:
+          type: array
+          items:
+            $ref: '#/components/schemas/ExchangePartner'
+        provisioning:
+          type: object
+          description: Completed provisioning steps mapped to timestamps.
+          additionalProperties:
+            type: string
+            format: date-time
+        _created:
+          type: string
+          format: date-time
+        _updated:
+          type: string
+          format: date-time
