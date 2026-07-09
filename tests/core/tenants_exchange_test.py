@@ -259,3 +259,43 @@ class ExchangeCopyMediaFlagTestCase(IsolatedAsyncioTestCase):
                 await self.transmitter._transmit(queue_item, subscriber={})
 
         copy_mock.assert_awaited_once()
+
+
+class AsyncFileToBytesTestCase(IsolatedAsyncioTestCase):
+    async def test_to_bytes_returns_content(self):
+        from superdesk.core.types.storage import SuperdeskAsyncFile
+
+        class FakeBuffer:
+            def __init__(self, data):
+                self._data = data
+                self._pos = 0
+
+            def seekable(self):
+                return True
+
+            def seek(self, pos):
+                self._pos = pos
+
+            def tell(self):
+                return self._pos
+
+            async def read(self, size=-1):
+                if size < 0:
+                    size = len(self._data) - self._pos
+                chunk = self._data[self._pos : self._pos + size]
+                self._pos += len(chunk)
+                return chunk
+
+        data = b"IMAGE-BYTES" * 1000
+        file = SuperdeskAsyncFile(
+            buffer=FakeBuffer(data),
+            content_type="image/png",
+            length=len(data),
+            name="x",
+            filename="x.png",
+            metadata={},
+            upload_date=None,
+            md5="",
+            media_id="x",
+        )
+        self.assertEqual(await file.to_bytes(), data)

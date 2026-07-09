@@ -115,8 +115,9 @@ class SuperdeskAsyncFile(SuperdeskFile, ResponseBody):
         async for data in self:
             buffer.write(data)
 
-        # Return the data from the buffer
-        return buffer.read()
+        # Return the data from the buffer (``read()`` here would start at the
+        # current position, i.e. the end, and always return empty bytes)
+        return buffer.getvalue()
 
     async def read(self, size: int = -1) -> bytes:  # type: ignore[override]
         return await self.buffer.read(size)
