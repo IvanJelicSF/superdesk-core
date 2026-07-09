@@ -294,10 +294,14 @@ same subscriber just switches to the `http_push` transmitter.
   is refused. `tenants:purge SLUG --yes` forces an immediate purge (ops escape hatch). The
   tombstone record is kept (audit + host reservation).
 - **Lifecycle webhooks** (`superdesk/tenants/webhooks.py` + `tenants.webhook_notify` task):
-  with `TENANT_WEBHOOK_URL` set, `tenant.suspended`, `tenant.activated`, `tenant.deleted` and
-  `tenant.purged` events POST `{event, tenant, status, hosts, timestamp, deleted_at?,
-  purged_at?}` to the configured endpoint — delivered via Celery with exponential-backoff
-  retries and HMAC-SHA256-signed (`X-Superdesk-Signature`) when `TENANT_WEBHOOK_SECRET` is set.
+  `tenant.suspended`, `tenant.activated`, `tenant.deleted` and `tenant.purged` events POST
+  `{event, tenant, status, hosts, timestamp, deleted_at?, purged_at?}` to the configured
+  endpoint — delivered via Celery with exponential-backoff retries and HMAC-SHA256-signed
+  (`X-Superdesk-Signature`) when a secret is set. The endpoint is **configurable from the
+  tenant admin panel** (`GET/PUT /tenant-admin/webhook`, secret write-only, plus
+  `POST /tenant-admin/webhook/test` for a synchronous `tenant.test` delivery); it is stored
+  in the control-plane `settings` collection, with `TENANT_WEBHOOK_URL`/`TENANT_WEBHOOK_SECRET`
+  as config-file fallback.
 - **Client integration**: `client_config` exposes `multi_tenant_enabled`,
   `shared_accounts_enabled` and `tenant_admin_url`; `GET /accounts/me/tenants` includes
   `is_super_admin` to gate the client's "Tenant administration" menu entry. Client-side spec:

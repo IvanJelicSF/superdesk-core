@@ -26,6 +26,7 @@ from functools import wraps
 
 from quart import Blueprint, request, jsonify, session
 
+from superdesk.utc import utcnow
 from superdesk.core import get_app_config
 from superdesk.core.tenants import Tenant, TenantStatus
 from superdesk import accounts
@@ -40,6 +41,7 @@ from .service import (
     TenantExistsError,
 )
 from .provisioning import provision_tenant
+from . import webhooks
 from .webhooks import notify_tenant_event, EVENT_SUSPENDED, EVENT_ACTIVATED, EVENT_DELETED
 
 logger = logging.getLogger(__name__)
@@ -341,6 +343,58 @@ async def tenant_users_create(slug):
         return jsonify({"_status": "ERR", "_error": {"code": 404, "message": "Unknown tenant"}}), 404
 
     return jsonify({"_status": "OK", "tenant": slug, "username": payload["username"]}), 201
+
+
+@bp.route("/tenant-admin/webhook", methods=["GET"])
+@admin_only
+async def webhook_get():
+    """Current webhook configuration; the secret itself is never returned."""
+
+    config = webhooks.get_webhook_config()
+    return jsonify({"url": config["url"], "has_secret": bool(config["secret"]), "source": config["source"]})
+
+
+@bp.route("/tenant-admin/webhook", methods=["PUT"])
+@admin_only
+async def webhook_put():
+    """Set the webhook endpoint (control plane, overrides the config file).
+
+    ``{"url": "", ...}`` removes the stored endpoint (falling back to the config
+    file); omitting ``secret`` keeps the stored one, ``"secret": ""`` clears it.
+    """
+
+    payload = await request.get_json(force=True)
+    url = (payload.get("url") or "").strip()
+    if url and not url.startswith(("https://", "http://")):
+        return jsonify({"_status": "ERR", "_error": {"message": "url must be http(s)"}}), 400
+
+    webhooks.set_webhook_config(url, payload.get("secret"))
+    config = webhooks.get_webhook_config()
+    return jsonify({"url": config["url"], "has_secret": bool(config["secret"]), "source": config["source"]})
+
+
+@bp.route("/tenant-admin/webhook/test", methods=["POST"])
+@admin_only
+async def webhook_test():
+    """Deliver a ``tenant.test`` event synchronously and report the result."""
+
+    config = webhooks.get_webhook_config()
+    if not config["url"]:
+        return jsonify({"_status": "ERR", "_error": {"message": "no webhook configured"}}), 400
+
+    payload = {
+        "event": webhooks.EVENT_TEST,
+        "tenant": None,
+        "status": None,
+        "hosts": [],
+        "timestamp": utcnow().isoformat(),
+    }
+    try:
+        response = webhooks.deliver_webhook(payload, config["url"], config["secret"])
+    except Exception as error:
+        return jsonify({"_status": "ERR", "_error": {"message": str(error)}}), 502
+
+    return jsonify({"_status": "OK", "response_status": response.status_code})
 
 
 def init_app(app) -> None:

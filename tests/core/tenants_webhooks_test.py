@@ -136,3 +136,96 @@ class RetentionPurgeTestCase(IsolatedAsyncioTestCase):
         self.app.wsgi.config["MULTI_TENANT_ENABLED"] = False
         purged = await tenant_tasks._purge_deleted_tenants()
         self.assertEqual(purged, 0)
+
+
+class WebhookAdminConfigTestCase(IsolatedAsyncioTestCase):
+    CONTROL_PLANE_DB = "sptests_controlplane_webhook"
+
+    def setUp(self):
+        from quart import Quart
+        from superdesk.tenants import admin_api
+
+        self.app = SuperdeskAsyncApp(
+            MockWSGI(
+                config={
+                    "MULTI_TENANT_ENABLED": True,
+                    "TENANT_ADMIN_HOST": "admin.example.com",
+                    "TENANT_ADMIN_API_TOKEN": "secret-token",
+                    "TENANTS_MONGO_DBNAME": self.CONTROL_PLANE_DB,
+                    "TENANTS_MONGO_URI": f"mongodb://localhost/{self.CONTROL_PLANE_DB}",
+                    "TENANT_WEBHOOK_URL": "https://fallback.example.com/hook",
+                    "TENANT_WEBHOOK_SECRET": "fallback-secret",
+                }
+            )
+        )
+        webhooks._settings_collection().database.client.drop_database(self.CONTROL_PLANE_DB)
+        app = Quart(__name__)
+        admin_api.init_app(app)
+        self.client = app.test_client()
+        self.headers = {"Authorization": "Bearer secret-token", "Host": "admin.example.com"}
+
+    def tearDown(self):
+        webhooks._settings_collection().database.client.drop_database(self.CONTROL_PLANE_DB)
+        self.app.stop()
+
+    async def test_get_falls_back_to_config_file(self):
+        response = await self.client.get("/tenant-admin/webhook", headers=self.headers)
+        payload = await response.get_json()
+        self.assertEqual(payload, {"url": "https://fallback.example.com/hook", "has_secret": True, "source": "config"})
+
+    async def test_put_overrides_config_and_hides_secret(self):
+        response = await self.client.put(
+            "/tenant-admin/webhook",
+            json={"url": "https://hooks.example.com/x", "secret": "new-secret"},
+            headers=self.headers,
+        )
+        payload = await response.get_json()
+        self.assertEqual(payload["url"], "https://hooks.example.com/x")
+        self.assertEqual(payload["source"], "control-plane")
+        self.assertTrue(payload["has_secret"])
+        self.assertNotIn("secret", payload)
+        self.assertEqual(webhooks.get_webhook_config()["secret"], "new-secret")
+
+        # omitting the secret keeps it; empty string clears it
+        await self.client.put(
+            "/tenant-admin/webhook", json={"url": "https://hooks.example.com/y"}, headers=self.headers
+        )
+        self.assertEqual(webhooks.get_webhook_config()["secret"], "new-secret")
+        await self.client.put(
+            "/tenant-admin/webhook", json={"url": "https://hooks.example.com/y", "secret": ""}, headers=self.headers
+        )
+        self.assertEqual(webhooks.get_webhook_config()["secret"], "")
+
+    async def test_put_empty_url_restores_fallback(self):
+        await self.client.put(
+            "/tenant-admin/webhook", json={"url": "https://hooks.example.com/x"}, headers=self.headers
+        )
+        response = await self.client.put("/tenant-admin/webhook", json={"url": ""}, headers=self.headers)
+        payload = await response.get_json()
+        self.assertEqual(payload["source"], "config")
+        self.assertEqual(payload["url"], "https://fallback.example.com/hook")
+
+    async def test_put_rejects_bad_url(self):
+        response = await self.client.put("/tenant-admin/webhook", json={"url": "ftp://nope"}, headers=self.headers)
+        self.assertEqual(response.status_code, 400)
+
+    async def test_test_delivery(self):
+        await self.client.put(
+            "/tenant-admin/webhook", json={"url": "https://hooks.example.com/x", "secret": "s"}, headers=self.headers
+        )
+        with mock.patch("requests.post") as post:
+            post.return_value.status_code = 204
+            post.return_value.raise_for_status = mock.Mock()
+            response = await self.client.post("/tenant-admin/webhook/test", headers=self.headers)
+        payload = await response.get_json()
+        self.assertEqual(payload["response_status"], 204)
+        sent = json.loads(post.call_args.kwargs["data"])
+        self.assertEqual(sent["event"], "tenant.test")
+
+    async def test_test_delivery_failure_reported(self):
+        await self.client.put(
+            "/tenant-admin/webhook", json={"url": "https://hooks.example.com/x"}, headers=self.headers
+        )
+        with mock.patch("requests.post", side_effect=Exception("connection refused")):
+            response = await self.client.post("/tenant-admin/webhook/test", headers=self.headers)
+        self.assertEqual(response.status_code, 502)

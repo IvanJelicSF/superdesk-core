@@ -49,27 +49,13 @@ def fan_out_task(task_name: str, *args, **kwargs):
 def webhook_notify_task(self, payload: dict):
     """Deliver a tenant lifecycle webhook (HTTPS POST, HMAC-signed when a secret is set)."""
 
-    import hashlib
-    import hmac as hmac_lib
-    import json
+    from superdesk.tenants.webhooks import get_webhook_config, deliver_webhook
 
-    import requests
-
-    from superdesk.core import get_app_config
-
-    url = get_app_config("TENANT_WEBHOOK_URL")
-    if not url:
+    config = get_webhook_config()
+    if not config["url"]:
         return
 
-    body = json.dumps(payload).encode("utf-8")
-    headers = {"Content-Type": "application/json"}
-    secret = get_app_config("TENANT_WEBHOOK_SECRET") or ""
-    if secret:
-        signature = hmac_lib.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
-        headers["X-Superdesk-Signature"] = f"sha256={signature}"
-
-    response = requests.post(url, data=body, headers=headers, timeout=(5, 30))
-    response.raise_for_status()
+    deliver_webhook(payload, config["url"], config["secret"])
     logger.info("tenant webhook delivered event=%s tenant=%s", payload.get("event"), payload.get("tenant"))
 
 
