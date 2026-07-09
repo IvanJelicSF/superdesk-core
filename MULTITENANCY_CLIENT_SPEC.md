@@ -255,9 +255,17 @@ receives `tenant.suspended/activated/deleted/purged` events:
 5. Unknown-host check: `curl -H "Host: nope.localhost" http://localhost:5000/api` → 404;
    suspended tenant (`tenants:disable tenant-b`) → 423.
 6. Admin panel: set `TENANT_ADMIN_HOST=admin.localhost` (add to `/etc/hosts`), then
-   `python manage.py accounts:set-super-admin --email admin@example.com` and log into
-   `POST /tenant-admin/login` on that host. (`TENANT_ADMIN_API_TOKEN` is optional — it is a
+   `docker compose exec server quart accounts:set-super-admin --email admin@example.com` and log
+   into `POST /tenant-admin/login` on that host. (`TENANT_ADMIN_API_TOKEN` is optional — it is a
    second, machine-oriented way in; the panel uses the session login.)
+7. **Dev-server proxy (critical):** when the panel is served by a dev server on the admin host
+   (e.g. `http://admin.localhost:80`), it must proxy `/tenant-admin/*` to the API
+   (`http://localhost:5000`) **preserving the original Host header** — the Host is what
+   authorizes the admin API (a rewritten Host gets 404 by design; no proxy at all gets 405
+   from the static server and the login can never succeed). Webpack:
+   `proxy: [{context: ['/tenant-admin'], target: 'http://localhost:5000', changeOrigin: false}]`;
+   nginx: `proxy_pass http://localhost:5000; proxy_set_header Host $host;`. The same applies to
+   tenant hosts if the client dev server proxies `/api` there.
 
 ## 10. Summary of client work items
 
