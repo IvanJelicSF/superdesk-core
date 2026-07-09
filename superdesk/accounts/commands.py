@@ -114,3 +114,18 @@ async def accounts_tenants(email):
         raise click.UsageError(f"No account for '{email}'")
     for tenant_id in service.list_account_tenants(account["_id"]):
         echo(tenant_id)
+
+
+@cli.command("accounts:set-super-admin", tenant_command=False)
+@click.option("--email", "-e", required=True, help="Email of the account.")
+@click.option("--revoke", is_flag=True, default=False, help="Revoke instead of grant.")
+async def accounts_set_super_admin(email, revoke):
+    """Grant (or revoke) tenant-administration rights to an account.
+
+    Super admins can log into the tenant administration panel on
+    ``TENANT_ADMIN_HOST``. Use this to bootstrap the first super admin.
+    """
+
+    if not service.update_account_sync(email, {"is_super_admin": not revoke}):
+        raise click.UsageError(f"No account for '{email}'")
+    echo(f"Account '{email}' {'revoked' if revoke else 'granted'} super admin")

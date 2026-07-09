@@ -112,9 +112,11 @@ def init_app(app) -> None:
         description=lazy_gettext("Allows sending content to partner tenants."),
     )
     app.register_blueprint(bp)
+    tenant_admin_host = app.config.get("TENANT_ADMIN_HOST") or ""
     app.client_config.update(
         {
             "multi_tenant_enabled": bool(app.config.get("MULTI_TENANT_ENABLED")),
             "shared_accounts_enabled": bool(app.config.get("SHARED_ACCOUNTS_ENABLED")),
+            "tenant_admin_url": f"https://{tenant_admin_host}" if tenant_admin_host else "",
         }
     )

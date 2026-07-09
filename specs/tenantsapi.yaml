@@ -19,6 +19,197 @@ info:
       archive item to a partner tenant, guarded by the `send_to_tenant` privilege.
 
 paths:
+  /tenant-admin/login:
+    post:
+      summary: Start a tenant-admin session
+      description: |
+        Authenticates with shared-account credentials; the account must be enabled and
+        flagged `is_super_admin` (grant via `accounts:set-super-admin --email ...` or the
+        accounts PATCH endpoint). On success a signed session cookie scoped to the admin
+        host is set; all `/tenant-admin/*` endpoints then accept the session as an
+        alternative to the bearer token. Requires `SHARED_ACCOUNTS_ENABLED`.
+      tags:
+        - Tenant admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: {type: string}
+                password: {type: string}
+      responses:
+        '200':
+          description: Session started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  _status: {type: string, example: OK}
+                  email: {type: string}
+        '401':
+          description: Invalid credentials or account lacks super-admin rights (indistinguishable)
+        '404':
+          description: Wrong host, multi-tenancy off or shared accounts off
+
+  /tenant-admin/logout:
+    post:
+      summary: End the tenant-admin session
+      tags:
+        - Tenant admin
+      responses:
+        '200':
+          description: Session ended
+
+  /tenant-admin/me:
+    get:
+      summary: Current admin identity
+      tags:
+        - Tenant admin
+      security:
+        - adminSession: []
+        - adminToken: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  auth: {type: string, enum: [session, token]}
+                  email: {type: string, description: Present for session auth.}
+        '404':
+          $ref: '#/components/responses/NotAuthorized'
+
+  /tenant-admin/accounts:
+    get:
+      summary: List shared accounts
+      tags:
+        - Tenant admin
+      security:
+        - adminSession: []
+        - adminToken: []
+      responses:
+        '200':
+          description: Accounts (never includes password hashes)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Account'
+        '404':
+          $ref: '#/components/responses/NotAuthorized'
+    post:
+      summary: Create an account (or update its credentials)
+      tags:
+        - Tenant admin
+      security:
+        - adminSession: []
+        - adminToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: {type: string, format: email}
+                username: {type: string}
+                password: {type: string}
+                is_super_admin: {type: boolean, default: false}
+      responses:
+        '201':
+          description: Created/updated account
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+        '400':
+          description: Missing email or password
+        '404':
+          $ref: '#/components/responses/NotAuthorized'
+
+  /tenant-admin/accounts/{email}:
+    patch:
+      summary: Update account flags or password
+      description: |
+        A session admin cannot revoke their own `is_enabled`/`is_super_admin` (400).
+      tags:
+        - Tenant admin
+      security:
+        - adminSession: []
+        - adminToken: []
+      parameters:
+        - name: email
+          in: path
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                is_enabled: {type: boolean}
+                is_super_admin: {type: boolean}
+                needs_password_reset: {type: boolean}
+                password: {type: string}
+      responses:
+        '200':
+          description: Updated account
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+        '400':
+          description: Attempt to revoke own admin access
+        '404':
+          description: Unknown account (or not authorized)
+
+  /tenant-admin/tenants/{slug}/users:
+    post:
+      summary: Create a user inside a tenant
+      description: |
+        Cross-tenant user administration: creates a tenant-local user (optionally an
+        administrator). With shared accounts enabled the credentials are automatically
+        linked to (or create) the matching control-plane account.
+      tags:
+        - Tenant admin
+      security:
+        - adminSession: []
+        - adminToken: []
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password, email]
+              properties:
+                username: {type: string}
+                password: {type: string}
+                email: {type: string, format: email}
+                admin: {type: boolean, default: false}
+      responses:
+        '201':
+          description: User created (noop if the username already exists in the tenant)
+        '400':
+          description: Missing fields
+        '404':
+          description: Unknown tenant (or not authorized)
+
   /tenant-admin/tenants:
     get:
       summary: List tenants
@@ -198,6 +389,11 @@ paths:
                           type: array
                           items:
                             type: string
+                  is_super_admin:
+                    type: boolean
+                    description: >
+                      Whether the user's account may manage tenants
+                      (gates the "Tenant administration" menu entry).
         '401':
           description: Not authenticated
 
@@ -295,8 +491,15 @@ components:
       type: http
       scheme: bearer
       description: |
-        Static token from `TENANT_ADMIN_API_TOKEN`; requests must also target
-        `TENANT_ADMIN_HOST`. Failing the guard yields `404`, not `401`.
+        Static token from `TENANT_ADMIN_API_TOKEN` (automation/ops); requests must also
+        target `TENANT_ADMIN_HOST`. Failing the guard yields `404`, not `401`.
+    adminSession:
+      type: apiKey
+      in: cookie
+      name: session
+      description: |
+        Signed session cookie set by `POST /tenant-admin/login` (super-admin shared
+        account); scoped to the admin host. Used by the tenant administration panel.
     session:
       type: apiKey
       in: cookie
@@ -310,6 +513,23 @@ components:
         or wrong host) — indistinguishable from a nonexistent route by design.
 
   schemas:
+    Account:
+      type: object
+      properties:
+        _id: {type: string}
+        email: {type: string, format: email}
+        username: {type: string}
+        is_enabled: {type: boolean}
+        is_super_admin: {type: boolean}
+        needs_password_reset: {type: boolean}
+        password_changed_on: {type: string, format: date-time}
+        tenants:
+          type: array
+          description: Tenants where this account has a linked user.
+          items: {type: string}
+        _created: {type: string, format: date-time}
+        _updated: {type: string, format: date-time}
+
     TenantStatus:
       type: string
       enum: [creating, active, suspended, deleted]

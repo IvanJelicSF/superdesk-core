@@ -82,6 +82,24 @@ def find_account_sync(username_or_email: str) -> Optional[dict]:
     return _collection().find_one(_credentials_query(username_or_email))
 
 
+def find_account_sync_by_id(account_id) -> Optional[dict]:
+    try:
+        oid = ObjectId(account_id)
+    except Exception:
+        return None
+    return _collection().find_one({"_id": oid})
+
+
+def list_accounts_sync() -> list[dict]:
+    return list(_collection().find({}).sort("email", 1))
+
+
+def update_account_sync(email: str, updates: dict) -> bool:
+    """Update account flags/fields; returns False when the account doesn't exist."""
+    result = _collection().update_one({"email": email.strip().lower()}, {"$set": {**updates, "_updated": utcnow()}})
+    return result.matched_count > 0
+
+
 def verify_account_password(account: dict, password: str) -> bool:
     hashed = (account.get("password") or "").encode("UTF-8")
     encoded = (password or "").encode("UTF-8")

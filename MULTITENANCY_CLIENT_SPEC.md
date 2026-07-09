@@ -42,12 +42,15 @@ to plain single-tenant behavior (see feature detection, §3).
 ```json
 {
   "multi_tenant_enabled": true,
-  "shared_accounts_enabled": true
+  "shared_accounts_enabled": true,
+  "tenant_admin_url": "https://admin.example.com"
 }
 ```
 
 - `multi_tenant_enabled` → gate the "send to tenant" action and any tenant-related UI.
 - `shared_accounts_enabled` → gate the tenant switcher.
+- `tenant_admin_url` → permanent location of the tenant administration panel (§8); empty
+  string when no admin host is configured.
 - The current tenant has no explicit id in config: the host **is** the tenant. For display
   purposes, `/accounts/me/tenants` (below) can be matched against `window.location.host`.
 
@@ -61,8 +64,12 @@ Both flags are `false` (or absent — treat absent as `false`) on single-tenant 
 { "tenants": [
     { "tenant": "tenant-a", "hosts": ["tenant-a.example.com"] },
     { "tenant": "tenant-b", "hosts": ["tenant-b.example.com"] }
-] }
+  ],
+  "is_super_admin": false }
 ```
+
+`is_super_admin` is `true` when the logged-in user's shared account may manage tenants —
+it gates the "Tenant administration" hamburger menu entry (§8).
 
 Lists the **active** tenants where the logged-in user's shared account has a linked user.
 Returns `{"tenants": []}` when shared accounts are off or the user has no account link.
@@ -150,14 +157,65 @@ Format for such destinations must be **ninjs** (the standard formatter select ap
   of a generic error toast (check for HTTP 423 in the api error interceptor).
 - `401` on requests after switching hosts is the normal "not logged in here" — route to login.
 
-## 8. Out of scope for the newsroom client
+## 8. UI feature 4 — Tenant administration panel
 
-- **Tenant administration** (create/suspend/delete tenants, partner allowlists) is CLI +
-  a token-guarded control-plane HTTP API on a separate admin host (`/tenant-admin/*`, see
-  `specs/tenantsapi.yaml`). It is *not* reachable from tenant hosts and needs no UI in
-  superdesk-client-core. A separate ops/admin frontend could be built on it later.
-- User management UI: unchanged — users are managed per tenant with the existing screens.
-  (`account_id` may appear on user docs; ignore/hide it.)
+Tenant administration is part of the client. It lives at a **permanent, unique location**:
+the reserved admin host from `client_config.tenant_admin_url` (e.g. `https://admin.example.com`
+— server setting `TENANT_ADMIN_HOST`). All `/tenant-admin/*` endpoints are served **only** on
+that host; they answer 404 anywhere else.
+
+### 8.1 Entry point (on every tenant)
+
+- Add a **"Tenant administration"** entry to the Superdesk hamburger (main) menu.
+- Visible only when `multi_tenant_enabled` && `tenant_admin_url` is non-empty &&
+  `GET /accounts/me/tenants` returns `is_super_admin: true` for the current user.
+- Selecting it opens `tenant_admin_url` (top-level navigation or new tab — it is a different
+  origin; do **not** XHR to it from a tenant host).
+
+### 8.2 Authentication on the admin host
+
+The panel is a separate view of the client app served on the admin host. It has its own
+session (the tenant session does not carry over):
+
+- `POST /tenant-admin/login {email, password}` — same shared-account credentials the user
+  logs into tenants with; the account must be flagged `is_super_admin`. `401` on failure
+  (no distinction between wrong password and missing rights), `200 {email}` on success —
+  a signed session cookie scoped to the admin host is set.
+- `GET /tenant-admin/me` → `{auth: "session", email}` — use for session restore on load;
+  404 means not logged in (the whole API cloaks as 404 when unauthorized).
+- `POST /tenant-admin/logout`.
+- Bootstrap note for ops: the first super admin is granted on the server with
+  `python manage.py accounts:set-super-admin --email root@example.com`.
+
+### 8.3 Panel screens (endpoints in `specs/tenantsapi.yaml`)
+
+**Tenants** — `GET /tenant-admin/tenants` list (slug, status, hosts, partners, provisioning
+markers); detail/actions:
+
+- Create (`POST /tenant-admin/tenants {slug, hosts[], admin?{username,password,email}, resume?}`)
+  — show a provisioning-in-progress state; `409` = exists (offer "resume"); `400` = invalid
+  slug (`^[a-z][a-z0-9-]{0,61}$`) or missing hosts.
+- Suspend / re-enable (`PATCH {status: "suspended"|"active"}`).
+- Exchange partners editor (`PATCH {exchange_partners: [{tenant, direction}]}`) — direction
+  `send`/`receive`/`both`; `400` names unknown partner tenants.
+- Delete (`DELETE /tenant-admin/tenants/{slug}?purge=1`) — only when suspended (`409`
+  otherwise); confirm dialog must spell out that purge drops all databases and media.
+
+**Accounts (cross-tenant users)** — `GET /tenant-admin/accounts` list (email, username, flags,
+`tenants: [...]` where the account has users); actions:
+
+- Create account (`POST {email, password, username?, is_super_admin?}`).
+- Edit flags / reset password (`PATCH /tenant-admin/accounts/{email}
+  {is_enabled?, is_super_admin?, needs_password_reset?, password?}`) — the server refuses
+  revoking your own admin access (`400`).
+- **Add user to a tenant** (`POST /tenant-admin/tenants/{slug}/users
+  {username, password, email, admin?}`) — creates the tenant-local user; with shared accounts
+  the credentials auto-link to the account. Noop if the username already exists in that tenant.
+  This is the cross-tenant user administration: pick an account, pick a tenant, create the user.
+
+Per-tenant profile details (roles, desks, avatars…) remain managed inside each tenant with the
+existing user screens; the panel handles existence + credentials + rights across tenants.
+(`account_id` may appear on tenant user docs; ignore/hide it in the tenant user forms.)
 
 ## 9. Local dev / testing setup
 
@@ -175,13 +233,21 @@ Format for such destinations must be **ninjs** (the standard formatter select ap
    (`accounts:migrate --all-tenants` links pre-existing users).
 5. Unknown-host check: `curl -H "Host: nope.localhost" http://localhost:5000/api` → 404;
    suspended tenant (`tenants:disable tenant-b`) → 423.
+6. Admin panel: set `TENANT_ADMIN_HOST=admin.localhost` (add to `/etc/hosts`), then
+   `python manage.py accounts:set-super-admin --email admin@example.com` and log into
+   `POST /tenant-admin/login` on that host. (`TENANT_ADMIN_API_TOKEN` is optional — it is a
+   second, machine-oriented way in; the panel uses the session login.)
 
 ## 10. Summary of client work items
 
-1. Read `multi_tenant_enabled` / `shared_accounts_enabled` from client config (feature gates).
+1. Read `multi_tenant_enabled` / `shared_accounts_enabled` / `tenant_admin_url` from client
+   config (feature gates).
 2. Tenant switcher in the user menu (`GET /accounts/me/tenants`, top-level redirect, re-login).
 3. "Send to tenant" item action (`GET /exchange/partners` + `POST /archive/send_to_tenant`),
    gated by the `send_to_tenant` privilege; success toast on 200, message passthrough on 400/403.
 4. Destination config form for the `internal_tenant` transmitter type (§6).
 5. HTTP 423 handling as a "tenant unavailable" page state.
-6. Optional: provenance hint ("from {tenant}") on exchanged ingest items.
+6. **Tenant administration panel** (§8): hamburger menu entry gated on `is_super_admin`,
+   admin-host view with its own login, tenants screen (create/provision, suspend, partners,
+   delete/purge) and accounts screen (create, flags, reset password, add user to tenant).
+7. Optional: provenance hint ("from {tenant}") on exchanged ingest items.

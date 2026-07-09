@@ -16,7 +16,7 @@ from superdesk.flask import g
 from superdesk.core import get_current_async_app
 from superdesk.auth.decorator import blueprint_auth
 
-from .service import is_shared_accounts_enabled, list_account_tenants
+from .service import is_shared_accounts_enabled, list_account_tenants, find_account_sync_by_id
 
 bp = Blueprint("accounts_api", __name__)
 
@@ -35,6 +35,7 @@ async def my_tenants():
     account_id = user.get("account_id")
 
     tenants: list = []
+    is_super_admin = False
     if account_id and is_shared_accounts_enabled():
         registry = get_current_async_app().tenants
         for tenant_id in list_account_tenants(account_id):
@@ -42,7 +43,10 @@ async def my_tenants():
             if tenant is not None and tenant.is_active:
                 tenants.append({"tenant": tenant.id, "hosts": list(tenant.hosts)})
 
-    return jsonify({"tenants": tenants})
+        account = find_account_sync_by_id(account_id)
+        is_super_admin = bool(account and account.get("is_enabled", True) and account.get("is_super_admin"))
+
+    return jsonify({"tenants": tenants, "is_super_admin": is_super_admin})
 
 
 def init_app(app) -> None:

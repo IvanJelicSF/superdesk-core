@@ -111,3 +111,128 @@ class TenantAdminApiTestCase(IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         set_status.assert_called_once()
         update.assert_called_once_with("tenant-a", {"exchange_partners": [{"tenant": "tenant-a", "direction": "both"}]})
+
+
+class TenantAdminSessionTestCase(IsolatedAsyncioTestCase):
+    """Super-admin session auth against a real control-plane db."""
+
+    CONTROL_PLANE_DB = "sptests_controlplane_admin"
+
+    def setUp(self):
+        import bcrypt
+        from superdesk.accounts import service as accounts_service
+
+        self.accounts_service = accounts_service
+        self.async_app = SuperdeskAsyncApp(
+            MockWSGI(
+                config={
+                    **CONFIG,
+                    "SHARED_ACCOUNTS_ENABLED": True,
+                    "TENANTS_MONGO_DBNAME": self.CONTROL_PLANE_DB,
+                    "TENANTS_MONGO_URI": f"mongodb://localhost/{self.CONTROL_PLANE_DB}",
+                    "TENANT_ADMIN_API_TOKEN": "",  # session auth only
+                }
+            )
+        )
+        accounts_service._collection().database.client.drop_database(self.CONTROL_PLANE_DB)
+        accounts_service.ensure_account_indexes()
+
+        password_hash = bcrypt.hashpw(b"secret", bcrypt.gensalt(4)).decode()
+        accounts_service._collection().insert_one(
+            {"email": "root@example.com", "password": password_hash, "is_enabled": True, "is_super_admin": True}
+        )
+        accounts_service._collection().insert_one(
+            {"email": "user@example.com", "password": password_hash, "is_enabled": True, "is_super_admin": False}
+        )
+
+        app = Quart(__name__)
+        app.secret_key = "test-secret"
+        admin_api.init_app(app)
+        self.client = app.test_client()
+        self.headers = {"Host": "admin.example.com"}
+
+    def tearDown(self):
+        self.accounts_service._collection().database.client.drop_database(self.CONTROL_PLANE_DB)
+        self.async_app.stop()
+
+    async def _login(self, email="root@example.com", password="secret"):
+        return await self.client.post(
+            "/tenant-admin/login", json={"email": email, "password": password}, headers=self.headers
+        )
+
+    async def test_login_grants_session_access(self):
+        # without login the api is cloaked
+        response = await self.client.get("/tenant-admin/tenants", headers=self.headers)
+        self.assertEqual(response.status_code, 404)
+
+        response = await self._login()
+        self.assertEqual(response.status_code, 200)
+
+        with mock.patch.object(admin_api, "list_tenant_docs", return_value=[]):
+            response = await self.client.get("/tenant-admin/tenants", headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+
+        response = await self.client.get("/tenant-admin/me", headers=self.headers)
+        self.assertEqual((await response.get_json())["email"], "root@example.com")
+
+    async def test_non_super_admin_rejected(self):
+        response = await self._login(email="user@example.com")
+        self.assertEqual(response.status_code, 401)
+
+    async def test_wrong_password_rejected(self):
+        response = await self._login(password="nope")
+        self.assertEqual(response.status_code, 401)
+
+    async def test_logout_ends_session(self):
+        await self._login()
+        await self.client.post("/tenant-admin/logout", headers=self.headers)
+        response = await self.client.get("/tenant-admin/tenants", headers=self.headers)
+        self.assertEqual(response.status_code, 404)
+
+    async def test_accounts_crud(self):
+        await self._login()
+
+        response = await self.client.post(
+            "/tenant-admin/accounts",
+            json={"email": "new@example.com", "password": "welcome1"},
+            headers=self.headers,
+        )
+        self.assertEqual(response.status_code, 201)
+        created = await response.get_json()
+        self.assertNotIn("password", created)
+
+        response = await self.client.get("/tenant-admin/accounts", headers=self.headers)
+        emails = [account["email"] for account in await response.get_json()]
+        self.assertIn("new@example.com", emails)
+
+        response = await self.client.patch(
+            "/tenant-admin/accounts/new@example.com", json={"is_super_admin": True}, headers=self.headers
+        )
+        self.assertTrue((await response.get_json())["is_super_admin"])
+
+    async def test_cannot_revoke_own_access(self):
+        await self._login()
+        response = await self.client.patch(
+            "/tenant-admin/accounts/root@example.com", json={"is_super_admin": False}, headers=self.headers
+        )
+        self.assertEqual(response.status_code, 400)
+
+    async def test_create_tenant_user(self):
+        await self._login()
+        handler = mock.AsyncMock()
+        from superdesk.core.tenants import Tenant
+        from superdesk.core.tenants.registry import TenantRegistry
+
+        with (
+            mock.patch("apps.auth.db.commands.create_user_command_handler", handler),
+            mock.patch.object(
+                TenantRegistry, "get_by_id_sync", return_value=Tenant(id="tenant-a", hosts=("a.example.com",))
+            ),
+        ):
+            response = await self.client.post(
+                "/tenant-admin/tenants/tenant-a/users",
+                json={"username": "john", "password": "secret1", "email": "john@example.com"},
+                headers=self.headers,
+            )
+        self.assertEqual(response.status_code, 201)
+        handler.assert_awaited_once()

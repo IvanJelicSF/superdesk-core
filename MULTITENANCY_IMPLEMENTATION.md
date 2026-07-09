@@ -269,11 +269,23 @@ same subscriber just switches to the `http_push` transmitter.
 - **HTTP tenant admin API** (`superdesk/tenants/admin_api.py`), in `CORE_APPS`:
   `GET|POST /tenant-admin/tenants`, `GET|PATCH|DELETE /tenant-admin/tenants/<slug>[?purge=1]`
   (create provisions via the same resumable flow as the CLI; PATCH updates status and the partner
-  allowlist; DELETE requires the tenant to be disabled). Fail-closed guard: requires
-  `MULTI_TENANT_ENABLED`, a non-empty `TENANT_ADMIN_API_TOKEN` bearer token and the request host to
-  equal `TENANT_ADMIN_HOST` — otherwise every endpoint answers 404 (the api does not advertise
-  itself). The tenant middleware serves the admin host without binding a tenant, so any
-  tenant-scoped access on it fails closed.
+  allowlist; DELETE requires the tenant to be disabled). Served only when `MULTI_TENANT_ENABLED`
+  and the request host equals `TENANT_ADMIN_HOST` — otherwise every endpoint answers 404 (the api
+  does not advertise itself). The tenant middleware serves the admin host without binding a
+  tenant, so any tenant-scoped access on it fails closed. Two auth mechanisms:
+  a **super-admin session** (`POST /tenant-admin/login` with shared-account credentials of an
+  account flagged `is_super_admin`; `GET /tenant-admin/me`, `POST /tenant-admin/logout`; used by
+  the tenant administration panel UI) and the optional static bearer token
+  `TENANT_ADMIN_API_TOKEN` (automation/ops). Bootstrap the first super admin with
+  `accounts:set-super-admin --email ...`.
+- **Cross-tenant user/account administration** (same api): `GET|POST /tenant-admin/accounts`,
+  `PATCH /tenant-admin/accounts/<email>` (flags, password; refuses revoking your own admin
+  access) and `POST /tenant-admin/tenants/<slug>/users` (creates a tenant-local user inside
+  `tenant_context`, auto-linking the shared account).
+- **Client integration**: `client_config` exposes `multi_tenant_enabled`,
+  `shared_accounts_enabled` and `tenant_admin_url`; `GET /accounts/me/tenants` includes
+  `is_super_admin` to gate the client's "Tenant administration" menu entry. Client-side spec:
+  [`MULTITENANCY_CLIENT_SPEC.md`](MULTITENANCY_CLIENT_SPEC.md).
 - **Manual "send to tenant"** (`superdesk/tenants/exchange/api.py`, in `CORE_APPS`):
   `POST /archive/send_to_tenant {item_id, target_tenant, desk?, stage?, auto_fetch?}`, guarded by
   the new `send_to_tenant` privilege; snapshots the archive item with the ninjs formatter and runs
