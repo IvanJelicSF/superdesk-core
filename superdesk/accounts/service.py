@@ -8,6 +8,7 @@
 # AUTHORS and LICENSE files distributed with this source code, or
 # at https://www.sourcefabric.org/superdesk/license
 
+import uuid
 import logging
 import datetime
 from typing import Any, Optional
@@ -23,6 +24,11 @@ logger = logging.getLogger(__name__)
 
 ACCOUNTS_COLLECTION = "accounts"
 ACCOUNT_TENANTS_COLLECTION = "account_tenants"
+SWITCH_TOKENS_COLLECTION = "account_switch_tokens"
+
+#: mongo TTL cleanup for unredeemed switch nonces; the signed token itself
+#: expires much earlier (SWITCH_TOKEN_MAX_AGE in api.py)
+SWITCH_TOKEN_RETENTION_SECONDS = 300
 
 
 def is_shared_accounts_enabled() -> bool:
@@ -46,10 +52,29 @@ def _mapping_collection():
     return get_current_async_app().tenants.get_control_plane_collection(ACCOUNT_TENANTS_COLLECTION)
 
 
+def _switch_tokens_collection():
+    return get_current_async_app().tenants.get_control_plane_collection(SWITCH_TOKENS_COLLECTION)
+
+
 def ensure_account_indexes() -> None:
     _collection().create_index("email", unique=True)
     _collection().create_index("username", unique=True, sparse=True)
     _mapping_collection().create_index([("account_id", 1), ("tenant", 1)], unique=True)
+    _switch_tokens_collection().create_index("_created", expireAfterSeconds=SWITCH_TOKEN_RETENTION_SECONDS)
+
+
+def issue_switch_nonce() -> str:
+    """Register a single-use nonce for a tenant-switch token."""
+    nonce = uuid.uuid4().hex
+    _switch_tokens_collection().insert_one({"_id": nonce, "_created": utcnow()})
+    return nonce
+
+
+def redeem_switch_nonce(nonce: str) -> bool:
+    """Consume a switch nonce; False when unknown, expired or already used."""
+    if not nonce:
+        return False
+    return _switch_tokens_collection().find_one_and_delete({"_id": nonce}) is not None
 
 
 def record_account_tenant(account_id: ObjectId, tenant_id: str) -> None:
@@ -90,8 +115,27 @@ def find_account_sync_by_id(account_id) -> Optional[dict]:
     return _collection().find_one({"_id": oid})
 
 
-def list_accounts_sync() -> list[dict]:
-    return list(_collection().find({}).sort("email", 1))
+def build_account_query(q: str = "") -> dict:
+    """Mongo query matching a search term against email and username."""
+    q = (q or "").strip()
+    if not q:
+        return {}
+    import re
+
+    pattern = re.compile(re.escape(q), re.IGNORECASE)
+    return {"$or": [{"email": pattern}, {"username": pattern}]}
+
+
+def count_accounts_sync(query: Optional[dict] = None) -> int:
+    return _collection().count_documents(query or {})
+
+
+def list_accounts_sync(query: Optional[dict] = None, page: int = 1, max_results: Optional[int] = None) -> list[dict]:
+    """List accounts sorted by email; ``max_results=None`` returns everything."""
+    cursor = _collection().find(query or {}).sort("email", 1)
+    if max_results:
+        cursor = cursor.skip(max(0, (page - 1) * max_results)).limit(max_results)
+    return list(cursor)
 
 
 def update_account_sync(email: str, updates: dict) -> bool:

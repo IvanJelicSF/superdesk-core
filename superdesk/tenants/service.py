@@ -46,8 +46,29 @@ def get_tenant_doc(tenant_id: str) -> Optional[dict]:
     return _registry().collection.find_one({"_id": tenant_id})
 
 
-def list_tenant_docs() -> list[dict]:
-    return list(_registry().collection.find({}).sort("_id", 1))
+def build_tenant_query(q: str = "") -> dict:
+    """Mongo query matching a search term against slug and display name."""
+    q = (q or "").strip()
+    if not q:
+        return {}
+    import re
+
+    pattern = re.compile(re.escape(q), re.IGNORECASE)
+    return {"$or": [{"_id": pattern}, {"name": pattern}]}
+
+
+def count_tenant_docs(query: Optional[dict] = None) -> int:
+    return _registry().collection.count_documents(query or {})
+
+
+def list_tenant_docs(
+    query: Optional[dict] = None, page: int = 1, max_results: Optional[int] = None
+) -> list[dict]:
+    """List tenants sorted by slug; ``max_results=None`` returns everything (CLI)."""
+    cursor = _registry().collection.find(query or {}).sort("_id", 1)
+    if max_results:
+        cursor = cursor.skip(max(0, (page - 1) * max_results)).limit(max_results)
+    return list(cursor)
 
 
 def update_tenant(tenant_id: str, updates: dict[str, Any]) -> None:

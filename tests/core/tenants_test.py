@@ -230,3 +230,46 @@ class TenantMetadataTestCase(TestCase):
     def test_empty_stored_name_falls_back_to_id(self):
         restored = Tenant.from_dict({"_id": "tenant-a", "hosts": ["a.example.com"], "name": ""})
         self.assertEqual(restored.name, "tenant-a")
+
+
+class TenantListPaginationTestCase(TestCase):
+    """Service-level pagination/search against a real control-plane db."""
+
+    CONTROL_PLANE_DB = "sptests_controlplane_paging"
+
+    def setUp(self):
+        from superdesk.tenants import service
+
+        self.service = service
+        self.app = SuperdeskAsyncApp(
+            MockWSGI(
+                config={
+                    "TENANTS_MONGO_DBNAME": self.CONTROL_PLANE_DB,
+                    "TENANTS_MONGO_URI": f"mongodb://localhost/{self.CONTROL_PLANE_DB}",
+                }
+            )
+        )
+        self.app.tenants.collection.database.client.drop_database(self.CONTROL_PLANE_DB)
+        for i in range(25):
+            self.service.create_tenant(Tenant(id=f"tenant-{i:02d}", name=f"Newsroom {i:02d}", hosts=(f"t{i}.x.com",)))
+
+    def tearDown(self):
+        self.app.tenants.collection.database.client.drop_database(self.CONTROL_PLANE_DB)
+        self.app.stop()
+
+    def test_pagination(self):
+        page1 = self.service.list_tenant_docs(page=1, max_results=10)
+        page3 = self.service.list_tenant_docs(page=3, max_results=10)
+        self.assertEqual(len(page1), 10)
+        self.assertEqual(len(page3), 5)
+        self.assertEqual(page1[0]["_id"], "tenant-00")
+        self.assertEqual(page3[0]["_id"], "tenant-20")
+        self.assertEqual(self.service.count_tenant_docs(), 25)
+        # no max_results = everything (CLI)
+        self.assertEqual(len(self.service.list_tenant_docs()), 25)
+
+    def test_search(self):
+        query = self.service.build_tenant_query("newsroom 1")
+        self.assertEqual(self.service.count_tenant_docs(query), 10)  # 10..19 by name
+        query = self.service.build_tenant_query("tenant-2")
+        self.assertEqual(self.service.count_tenant_docs(query), 5)  # tenant-20..tenant-24

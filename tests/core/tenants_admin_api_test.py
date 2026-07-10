@@ -50,11 +50,28 @@ class TenantAdminApiTestCase(IsolatedAsyncioTestCase):
 
     async def test_list(self):
         docs = [{"_id": "tenant-a", "status": "active", "hosts": ["a.example.com"]}]
-        with mock.patch.object(admin_api, "list_tenant_docs", return_value=docs):
-            response = await self.client.get("/tenant-admin/tenants", headers=AUTH)
+        with (
+            mock.patch.object(admin_api, "list_tenant_docs", return_value=docs) as lister,
+            mock.patch.object(admin_api, "count_tenant_docs", return_value=123),
+        ):
+            response = await self.client.get("/tenant-admin/tenants?page=2&max_results=25&q=ten", headers=AUTH)
         self.assertEqual(response.status_code, 200)
         payload = await response.get_json()
-        self.assertEqual(payload[0]["slug"], "tenant-a")
+        self.assertEqual(payload["_items"][0]["slug"], "tenant-a")
+        self.assertEqual(payload["_meta"], {"page": 2, "max_results": 25, "total": 123})
+        self.assertEqual(lister.call_args.kwargs, {"page": 2, "max_results": 25})
+        # q param produced a search query
+        self.assertIn("$or", lister.call_args.args[0])
+
+    async def test_list_pagination_bounds(self):
+        with (
+            mock.patch.object(admin_api, "list_tenant_docs", return_value=[]) as lister,
+            mock.patch.object(admin_api, "count_tenant_docs", return_value=0),
+        ):
+            await self.client.get("/tenant-admin/tenants?page=0&max_results=9999", headers=AUTH)
+            self.assertEqual(lister.call_args.kwargs, {"page": 1, "max_results": 200})
+            await self.client.get("/tenant-admin/tenants?page=abc&max_results=abc", headers=AUTH)
+            self.assertEqual(lister.call_args.kwargs, {"page": 1, "max_results": 50})
 
     async def test_create_provisions(self):
         provision = mock.AsyncMock()
@@ -242,9 +259,11 @@ class TenantAdminSessionTestCase(IsolatedAsyncioTestCase):
         created = await response.get_json()
         self.assertNotIn("password", created)
 
-        response = await self.client.get("/tenant-admin/accounts", headers=self.headers)
-        emails = [account["email"] for account in await response.get_json()]
-        self.assertIn("new@example.com", emails)
+        response = await self.client.get("/tenant-admin/accounts?q=new@", headers=self.headers)
+        payload = await response.get_json()
+        emails = [account["email"] for account in payload["_items"]]
+        self.assertEqual(emails, ["new@example.com"])
+        self.assertEqual(payload["_meta"]["total"], 1)
 
         response = await self.client.patch(
             "/tenant-admin/accounts/new@example.com", json={"is_super_admin": True}, headers=self.headers

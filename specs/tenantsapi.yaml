@@ -97,21 +97,37 @@ paths:
 
   /tenant-admin/accounts:
     get:
-      summary: List shared accounts
+      summary: List shared accounts (paginated)
       tags:
         - Tenant admin
       security:
         - adminSession: []
         - adminToken: []
+      parameters:
+        - name: page
+          in: query
+          schema: {type: integer, minimum: 1, default: 1}
+        - name: max_results
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 200, default: 50}
+        - name: q
+          in: query
+          description: Case-insensitive substring search on email and username.
+          schema: {type: string}
       responses:
         '200':
           description: Accounts (never includes password hashes)
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/Account'
+                type: object
+                properties:
+                  _items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Account'
+                  _meta:
+                    $ref: '#/components/schemas/ListMeta'
         '404':
           $ref: '#/components/responses/NotAuthorized'
     post:
@@ -361,20 +377,37 @@ paths:
 
   /tenant-admin/tenants:
     get:
-      summary: List tenants
+      summary: List tenants (paginated)
       tags:
         - Tenant admin
       security:
+        - adminSession: []
         - adminToken: []
+      parameters:
+        - name: page
+          in: query
+          schema: {type: integer, minimum: 1, default: 1}
+        - name: max_results
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 200, default: 50}
+        - name: q
+          in: query
+          description: Case-insensitive substring search on slug and display name.
+          schema: {type: string}
       responses:
         '200':
           description: OK
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/Tenant'
+                type: object
+                properties:
+                  _items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Tenant'
+                  _meta:
+                    $ref: '#/components/schemas/ListMeta'
         '404':
           $ref: '#/components/responses/NotAuthorized'
     post:
@@ -770,6 +803,13 @@ components:
         or wrong host) — indistinguishable from a nonexistent route by design.
 
   schemas:
+    ListMeta:
+      type: object
+      properties:
+        page: {type: integer}
+        max_results: {type: integer}
+        total: {type: integer}
+
     Webhook:
       type: object
       properties:

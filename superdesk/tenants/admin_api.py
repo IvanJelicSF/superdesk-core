@@ -34,6 +34,8 @@ from superdesk import accounts
 from .service import (
     get_tenant_doc,
     list_tenant_docs,
+    count_tenant_docs,
+    build_tenant_query,
     set_tenant_status,
     mark_tenant_deleted,
     restore_deleted_tenant,
@@ -151,10 +153,36 @@ async def admin_me():
     return jsonify({"auth": "token"})
 
 
+DEFAULT_PAGE_SIZE = 50
+MAX_PAGE_SIZE = 200
+
+
+def _pagination_params() -> tuple[int, int]:
+    """``page`` (1-based) and ``max_results`` query params, bounded."""
+    try:
+        page = max(1, int(request.args.get("page", 1)))
+    except ValueError:
+        page = 1
+    try:
+        max_results = int(request.args.get("max_results", DEFAULT_PAGE_SIZE))
+    except ValueError:
+        max_results = DEFAULT_PAGE_SIZE
+    return page, min(max(1, max_results), MAX_PAGE_SIZE)
+
+
+def _paginated(items: list, page: int, max_results: int, total: int) -> dict:
+    return {"_items": items, "_meta": {"page": page, "max_results": max_results, "total": total}}
+
+
 @bp.route("/tenant-admin/tenants", methods=["GET"])
 @admin_only
 async def tenants_list():
-    return jsonify([_public(doc) for doc in list_tenant_docs()])
+    """Paginated tenant list: ``?page=&max_results=&q=`` (q searches slug and name)."""
+
+    page, max_results = _pagination_params()
+    query = build_tenant_query(request.args.get("q", ""))
+    items = [_public(doc) for doc in list_tenant_docs(query, page=page, max_results=max_results)]
+    return jsonify(_paginated(items, page, max_results, count_tenant_docs(query)))
 
 
 @bp.route("/tenant-admin/tenants", methods=["POST"])
@@ -277,7 +305,12 @@ async def tenants_delete(slug):
 @bp.route("/tenant-admin/accounts", methods=["GET"])
 @admin_only
 async def accounts_list():
-    return jsonify([_public_account(doc) for doc in accounts.list_accounts_sync()])
+    """Paginated accounts list: ``?page=&max_results=&q=`` (q searches email and username)."""
+
+    page, max_results = _pagination_params()
+    query = accounts.build_account_query(request.args.get("q", ""))
+    items = [_public_account(doc) for doc in accounts.list_accounts_sync(query, page=page, max_results=max_results)]
+    return jsonify(_paginated(items, page, max_results, accounts.count_accounts_sync(query)))
 
 
 @bp.route("/tenant-admin/accounts", methods=["POST"])

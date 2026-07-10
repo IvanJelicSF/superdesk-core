@@ -29,6 +29,8 @@ from .service import (  # noqa: F401
     find_account_sync,
     find_account_sync_by_id,
     list_accounts_sync,
+    count_accounts_sync,
+    build_account_query,
     update_account_sync,
     verify_account_password,
     account_password_expired,

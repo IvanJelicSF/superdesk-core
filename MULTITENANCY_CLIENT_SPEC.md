@@ -199,8 +199,12 @@ session (the tenant session does not carry over):
 
 ### 8.3 Panel screens (endpoints in `specs/tenantsapi.yaml`)
 
-**Tenants** — `GET /tenant-admin/tenants` list (slug, status, hosts, partners, provisioning
-markers); detail/actions:
+**Tenants** — `GET /tenant-admin/tenants` list, **paginated** (`?page=&max_results=` — default
+50, max 200 — plus `?q=` searching slug and name; response is `{_items, _meta: {page,
+max_results, total}}`). Deployments can have hundreds/thousands of tenants: render a paged
+table with a search box, don't fetch-all. The accounts list is paginated the same way.
+Fields per tenant: slug, name, description, status, hosts, partners, provisioning markers.
+Detail/actions:
 
 - Create (`POST /tenant-admin/tenants {slug, name?, description?, hosts[], admin?{username,password,email}, resume?}`)
   — show a provisioning-in-progress state; `409` = exists (offer "resume"); `400` = invalid
